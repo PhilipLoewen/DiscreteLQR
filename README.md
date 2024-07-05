@@ -7,6 +7,8 @@ of the optimal value with respect to each and every one of the coefficient matri
 Additional methods will return the gradients with respect to the system parameters for an arbitrary smooth
 function defined in terms of the optimal trajectory.
 
+Details of the design and notation are provided in the docstring for the `__init__` function.
+
 Inspiration came from _OptNet: Differentiable Optimization as a Layer in Neural Networks_ by Brandon Amos and J. Zico Kolter,
 online at https://arxiv.org/pdf/1703.00443.
 
