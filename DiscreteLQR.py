@@ -2,6 +2,7 @@ import copy
 import numpy as np
 import PrettyPrinter as ppm
 
+
 class DiscreteLQR:
     """
     Record the defining properties and calculate key features
@@ -14,7 +15,7 @@ class DiscreteLQR:
     the user must supply A, B, and f; also T.
 
     We write n for the dimension of x, and m for the dimension of u.
-    
+
     For convenience, stack vectors x[t] and u[t] into a tall
     column and call the result z[t]. Then a "trajectory" for
     the system has the form (z[0],z[1],...,z[T-1],z[T]),
@@ -29,10 +30,10 @@ class DiscreteLQR:
            We typically treat trajectories in terms of the
            separated sequences (x[0],...,x[T]) and (u[0],...,u[T-1]).
         1. In the user-specified ingredients C[0] and c[0],
-           all the elements that that touch components of 
+           all the elements that that touch components of
            the initial vector x[0] are ignored when calculating J.
         2. In the user-specified ingredients C[T] and c[T],
-           all the elements that that touch components of 
+           all the elements that that touch components of
            the control value u[T] are ignored when calculating J.
 
     To set things up, the user must provide the cost coefficients C, c,
@@ -64,7 +65,7 @@ class DiscreteLQR:
         c = np.ones((4,1))
     Then one could specify the number of time-steps by saying
         Tf= 12
-    and create the corresponding system object with this powerful 
+    and create the corresponding system object with this powerful
     command:
         mysystem = mylqr.DiscreteLQR(C,c,F,f,T=Tf)
 
@@ -120,7 +121,7 @@ class DiscreteLQR:
 
     Knowing the final time T, a backward iteration determines feedback
     coefficients K_t and k_t for T=0,1,...,T-1, and
-    quadratic value coefficients V_t and v_t for t=0,...,T. 
+    quadratic value coefficients V_t and v_t for t=0,...,T.
     These are all computed as part of creating the DiscreteLQR object,
     and stored as attributes of the system object after that.
 
@@ -149,7 +150,7 @@ class DiscreteLQR:
         gradCtW(t,wx,wu,x0) - derivative of value W(x0) w.r.t. C(t)
         gradftW(t,wx,wu,x0) - derivative of value W(x0) w.r.t. f(t)
         gradctW(t,wx,wu,x0) - derivative of value W(x0) w.r.t. c(t)
-        gradx0W(wx,wu,x0)   - derivative of value W(x0) w.r.t. x0  
+        gradx0W(wx,wu,x0)   - derivative of value W(x0) w.r.t. x0
 
     ## GRADIENTS INVOLVING TIME-INVARIANT ELEMENTS ##
 
@@ -190,7 +191,7 @@ class DiscreteLQR:
     ... 2023-07-20: First working draft, inspired by Thiago da Cunha Vasco
     """
 
-    def __init__(self, C_mats, c_vecs, F_mats, f_vecs, T = None):
+    def __init__(self, C_mats, c_vecs, F_mats, f_vecs, T=None):
         """
         The state space is n-dimensional and the control space is m-dimensional.
 
@@ -238,7 +239,9 @@ class DiscreteLQR:
         # print(f"Consequently self.autonomous is {self.autonomous}.")
 
         if T == None and self.autonomous:
-            raise AttributeError("For autonomous systems, a positive final time T must be provided explicitly.")
+            raise AttributeError(
+                "For autonomous systems, a positive final time T must be provided explicitly."
+            )
 
         # A few basic sanity tests have passed.
         # Promote the input parameters to be attributes of the new object we are constructing.
@@ -246,12 +249,12 @@ class DiscreteLQR:
 
         if C_mats.ndim == 2:
             # Autonomous case, all coeffs C_t are this same thing.
-            self.C_mats = (C_mats + C_mats.T)/2.0
+            self.C_mats = (C_mats + C_mats.T) / 2.0
         else:
             # Time-varying case, symmetrize each component.
             self.C_mats = np.zeros(C_mats.shape)
             for t in range(C_mats.shape[2]):
-                self.C_mats[:,:,t] = (C_mats[:,:,t] + C_mats[:,:,t].T)/2.0
+                self.C_mats[:, :, t] = (C_mats[:, :, t] + C_mats[:, :, t].T) / 2.0
 
         self.c_vecs = c_vecs
         self.F_mats = F_mats
@@ -263,45 +266,47 @@ class DiscreteLQR:
         self.m = self.input_dim
 
         # Infer largest usable value for final subscript T from other given inputs
-        intfinity = 2**30    # Leave just a little headroom below (2**31 - 1).
+        intfinity = 2**30  # Leave just a little headroom below (2**31 - 1).
         Tceiling = []
 
-        #print(f"DEBUG: C_mats has shape {self.C_mats.shape}.")
-        if self.C_mats.ndim==3:
-            Tceiling.append(self.C_mats.shape[2]-1)
+        # print(f"DEBUG: C_mats has shape {self.C_mats.shape}.")
+        if self.C_mats.ndim == 3:
+            Tceiling.append(self.C_mats.shape[2] - 1)
         else:
             Tceiling.append(intfinity)
 
-        #print(f"DEBUG: c_vecs has shape {self.c_vecs.shape}.")
-        if self.c_vecs.ndim==3:
-            Tceiling.append(self.c_vecs.shape[2]-1)
+        # print(f"DEBUG: c_vecs has shape {self.c_vecs.shape}.")
+        if self.c_vecs.ndim == 3:
+            Tceiling.append(self.c_vecs.shape[2] - 1)
         else:
             Tceiling.append(intfinity)
 
-        #print(f"DEBUG: F_mats has shape {self.F_mats.shape}.")
-        if self.F_mats.ndim==3:
+        # print(f"DEBUG: F_mats has shape {self.F_mats.shape}.")
+        if self.F_mats.ndim == 3:
             Tceiling.append(self.F_mats.shape[2])
         else:
             Tceiling.append(intfinity)
 
-        #print(f"DEBUG: f_vecs has shape {self.f_vecs.shape}.")
-        if self.f_vecs.ndim==3:
+        # print(f"DEBUG: f_vecs has shape {self.f_vecs.shape}.")
+        if self.f_vecs.ndim == 3:
             Tceiling.append(self.f_vecs.shape[2])
         else:
             Tceiling.append(intfinity)
         self.Tmax = min(Tceiling)
-        #print(f"DEBUG: Features above lead to Tceiling={Tceiling}, so Tmax={self.Tmax:d}.\n")
+        # print(f"DEBUG: Features above lead to Tceiling={Tceiling}, so Tmax={self.Tmax:d}.\n")
 
         if T != None and T >= 0:
-            #print(f"DEBUG: Input declares explicit final T={T}.\n       ",end="")
+            # print(f"DEBUG: Input declares explicit final T={T}.\n       ",end="")
             if T == 0:
-                raise AttributeError("The DiscreteLQR module requires T>0; given inputs imply T=0.")
+                raise AttributeError(
+                    "The DiscreteLQR module requires T>0; given inputs imply T=0."
+                )
                 return None
             if T <= self.Tmax:
-                #print(f"This is compatible with Tmax={self.Tmax}, so we will use T={T}.\n")
+                # print(f"This is compatible with Tmax={self.Tmax}, so we will use T={T}.\n")
                 self.Tmax = T
             else:
-                #print(f"This exceeds Tmax={self.Tmax}, so we will use T={self.Tmax} instead. Expect trouble!\n")
+                # print(f"This exceeds Tmax={self.Tmax}, so we will use T={self.Tmax} instead. Expect trouble!\n")
                 pass
         self.T = self.Tmax
 
@@ -313,20 +318,22 @@ class DiscreteLQR:
         # If x0 is a n-by-1 array, it means we have recorded an optimal trajectory and
         # built the corresponding sensitivity matrix for that x0.
         # If x0 is None, these elements are not yet ready. They get built on first request.
-        self.sol_x0  = None
-        self.sol_x   = None
-        self.sol_u   = None
+        self.sol_x0 = None
+        self.sol_x = None
+        self.sol_u = None
         self.sol_lam = None
-        self.sens_mtx = np.zeros((( 2*self.n + self.m)*self.T, (2*self.n + self.m)*self.T))
+        self.sens_mtx = np.zeros(
+            ((2 * self.n + self.m) * self.T, (2 * self.n + self.m) * self.T)
+        )
 
         # Reserve space for the Big Olde Product matrix used for general sensitivity calculations.
-        self.BOP   = None
+        self.BOP = None
         self.BOPwx = None
         self.BOPwu = None
         self.senssol = None
 
         # Now build the whole feedback structure
-        # 
+        #
         # Compute time-varying optimal LQR control feedback coefficients.
         # :parameter  finalT: Upper index in objective, which is
         #                sum( 0.5*z[t]'*C[t]*z[t] + c[t]'*z[t],t=0,...,T)
@@ -346,12 +353,12 @@ class DiscreteLQR:
         K_mats = np.zeros((self.m, self.n, self.T))
         k_vecs = np.zeros((self.m, 1, self.T))
 
-        beta   = np.zeros(self.T+1)
+        beta = np.zeros(self.T + 1)
 
         T = self.T
         V_mats[:, :, T] = self.C(T)[: self.n, : self.n]
         v_vecs[:, 0, T:] = self.c(T)[: self.n, [0]]
-        beta[T] = 0.0          # Redundant but readable
+        beta[T] = 0.0  # Redundant but readable
 
         # Our theoretical formulation starts the sum with t=0.
         # This aligns math subscripts with Python indices perfectly.
@@ -361,20 +368,20 @@ class DiscreteLQR:
             c = self.c(t)
             F = self.F(t)
             f = self.f(t)
-            V = V_mats[:,:,t+1]
-            v = v_vecs[:,0,t+1].reshape(self.n,1)
+            V = V_mats[:, :, t + 1]
+            v = v_vecs[:, 0, t + 1].reshape(self.n, 1)
 
-            #Q = self.C(t) + self.F(t).T @ V_mats[:, :, t + 1] @ self.F(t)
+            # Q = self.C(t) + self.F(t).T @ V_mats[:, :, t + 1] @ self.F(t)
             Q = C + F.T @ V @ F
 
-            #q = (
+            # q = (
             #    self.c(t)
             #    + self.F(t).T @ V_mats[:, :, t + 1] @ self.f(t)
             #    + self.F(t).T @ v_vecs[:, t + 1].reshape(self.n, 1)
-            #)
+            # )
             q = c + F.T @ V @ f + F.T @ v
 
-            gamma = beta[t+1] + v.T @ f + 0.5* f.T @ V @ f
+            gamma = beta[t + 1] + v.T @ f + 0.5 * f.T @ V @ f
 
             if False:
                 # Print for debugging.
@@ -404,9 +411,9 @@ class DiscreteLQR:
             K = -Q_uu_inv @ Q_ux
             k = (-Q_uu_inv @ q_u).reshape(self.m, 1)
 
-            b = beta[t+1] - 0.5*q_u.T @ Q_uu_inv @ q_u + 0.5 * f.T @ V @ f + v.T @ f
+            b = beta[t + 1] - 0.5 * q_u.T @ Q_uu_inv @ q_u + 0.5 * f.T @ V @ f + v.T @ f
 
-            V_mats[:,:,t] = Q_xx - K.T @ Q_uu @ K
+            V_mats[:, :, t] = Q_xx - K.T @ Q_uu @ K
             v_vecs[:, 0, [t]] = q_x + Q_xu @ k
 
             K_mats[:, :, t] = K
@@ -418,8 +425,7 @@ class DiscreteLQR:
         self.k_vecs = k_vecs
         self.V_mats = V_mats
         self.v_vecs = v_vecs
-        self.beta   = beta
-
+        self.beta = beta
 
     def C(self, t):
         """Return the quadratic cost coefficient matrix C_t, a matrix of shape (n+m,n+m)."""
@@ -431,20 +437,20 @@ class DiscreteLQR:
             Ct = copy.deepcopy(self.C_mats)
         elif self.C_mats.shape[2] == 1:
             # Constructor got a 3D array as input, but it only contains 1 matrix
-            Ct = copy.deepcopy(self.C_mats[:,:,0])
+            Ct = copy.deepcopy(self.C_mats[:, :, 0])
         else:
             # Typical time-varying setup.
             Ct = copy.deepcopy(self.C_mats[:, :, t])
 
         # At times t=0 and t=T, some adjustments are required.
-        if t==0:
+        if t == 0:
             # Dependence on x[0] is forbidden
-            Ct[:,0:n] = np.zeros((m+n,n))
-            Ct[0:n,:] = np.zeros((n,m+n))
-        if t==self.T:
+            Ct[:, 0:n] = np.zeros((m + n, n))
+            Ct[0:n, :] = np.zeros((n, m + n))
+        if t == self.T:
             # Dependence on u[T] is forbidden
-            Ct[:,n:n+m] = np.zeros((m+n,m))
-            Ct[n:n+m,:] = np.zeros((m,m+n))
+            Ct[:, n : n + m] = np.zeros((m + n, m))
+            Ct[n : n + m, :] = np.zeros((m, m + n))
         return Ct
 
     def c(self, t):
@@ -464,10 +470,10 @@ class DiscreteLQR:
             ct = copy.deepcopy(self.c_vecs[:, :, t]).reshape(self.m + self.n, 1)
 
         # At times t=0 and t=T, some adjustments are required.
-        if t==0:
-            ct[0:n,[0]] = np.zeros((n,1))   # Dependence on x[0] is forbidden
-        if t==self.T:
-            ct[n:n+m,[0]] = np.zeros((m,1)) # Dependence on u[T] is forbidden
+        if t == 0:
+            ct[0:n, [0]] = np.zeros((n, 1))  # Dependence on x[0] is forbidden
+        if t == self.T:
+            ct[n : n + m, [0]] = np.zeros((m, 1))  # Dependence on u[T] is forbidden
         return ct
 
     def F(self, t):
@@ -500,63 +506,89 @@ class DiscreteLQR:
         for the given initial point and control sequence."""
 
         if u_vecs.ndim < 2:
-            print(f"Error in openloopxu: expecting 3D array of shape ({self.m},1,{self.T-1}).")
+            print(
+                f"Error in openloopxu: expecting 3D array of shape ({self.m},1,{self.T-1})."
+            )
             return None
         elif u_vecs.ndim == 2:
-            m,r = u_vecs.shape
+            m, r = u_vecs.shape
             if m != self.m:
-                print(f"Error in openloopxu: inputs have dimension {m}, but system wants {self.m}.")
+                print(
+                    f"Error in openloopxu: inputs have dimension {m}, but system wants {self.m}."
+                )
                 return None
-            u = u_vecs.reshape(self.m,1,r)
+            u = u_vecs.reshape(self.m, 1, r)
             T = r
         else:
-            m,o,r = u_vecs.shape
+            m, o, r = u_vecs.shape
             if m != self.m:
-                print(f"Error in openloopxu: inputs have dimension {m}, but system wants {self.m}.")
+                print(
+                    f"Error in openloopxu: inputs have dimension {m}, but system wants {self.m}."
+                )
                 return None
             if o != 1:
-                print(f"Error in openloopxu: expecting 3D array of shape ({self.m},1,{self.T-1}).")
+                print(
+                    f"Error in openloopxu: expecting 3D array of shape ({self.m},1,{self.T-1})."
+                )
                 return None
             u = u_vecs
         T = r
         # Now u looks like u_vecs, but with the correct shape.
 
-        x = np.ndarray((self.n, 1, 1 + T))  # Save  1+T slots for the trajectory of n-by-1 columns
-        if T > self.Tmax+1:
-            print(f"Warning from openloopxu: requested final time is {T+1}, ",end="")
+        x = np.ndarray(
+            (self.n, 1, 1 + T)
+        )  # Save  1+T slots for the trajectory of n-by-1 columns
+        if T > self.Tmax + 1:
+            print(f"Warning from openloopxu: requested final time is {T+1}, ", end="")
             print(f"but some system dynamics are only known up to time {self.T}.")
             print(f"Execution continues, but problems should be expected.\n")
 
-        x[:, [0], [0]] = x0[:].reshape(self.n, 1)  # Copy initial condition into result structure
+        x[:, [0], [0]] = x0[:].reshape(
+            self.n, 1
+        )  # Copy initial condition into result structure
 
         for t in range(T):
-            z_t = np.vstack([x[:, [0], [t]], u[:, [0], [t]]]).reshape(self.n + self.m, 1)
-            x[:, [0], [t+1]] = self.F(t) @ z_t + self.f(t)
+            z_t = np.vstack([x[:, [0], [t]], u[:, [0], [t]]]).reshape(
+                self.n + self.m, 1
+            )
+            x[:, [0], [t + 1]] = self.F(t) @ z_t + self.f(t)
 
         return x, u
 
     #########################################################################################################
     def J(self, xvecs, uvecs):
         if xvecs.shape[0] != self.n:
-            print(f"Trouble in function J: state vectors have the wrong dimension ",end="")
+            print(
+                f"Trouble in function J: state vectors have the wrong dimension ",
+                end="",
+            )
             print(f"(got {xvecs.shape[0]}, expected {self.n}).")
             print(f"Giving up and returning NaN.")
             return float("NaN")
         if uvecs.shape[0] != self.m:
-            print(f"Trouble in function J: input vectors have the wrong dimension ",end="")
+            print(
+                f"Trouble in function J: input vectors have the wrong dimension ",
+                end="",
+            )
             print(f"(got {uvecs.shape[0]}, expected {self.m}).")
             print(f"Giving up and returning NaN.")
             return float("NaN")
         if xvecs.shape[2] - uvecs.shape[2] != 1:
             print(f"Trouble in function J:")
-            print(f"  x_t is given for t=0,...,{xvecs.shape[1]-1}, suggesting T={xvecs.shape[1]-1},")
-            print(f"  u_t is given for t=0,...,{uvecs.shape[1]-1}, suggesting T={uvecs.shape[1]}")
+            print(
+                f"  x_t is given for t=0,...,{xvecs.shape[1]-1}, suggesting T={xvecs.shape[1]-1},"
+            )
+            print(
+                f"  u_t is given for t=0,...,{uvecs.shape[1]-1}, suggesting T={uvecs.shape[1]}"
+            )
             print(f"Giving up and returning NaN.")
             return float("NaN")
 
-        finalT = xvecs.shape[2]-1
+        finalT = xvecs.shape[2] - 1
         if finalT != self.Tmax:
-            print(f"System has final time T={self.Tmax} by design, but given trajectory ends at index t={finalT}.")
+            print(
+                f"System has final time T={self.Tmax} by design, but given trajectory ends at index t={finalT}."
+            )
             print(f"And we do special things with the final index, so be careful!")
 
         Jval = np.zeros((1, 1))  # J is scalar but numpy ops favour a 1-by-1 array
@@ -564,13 +596,13 @@ class DiscreteLQR:
         # PDL, 2024-06-25 ... repackaged this into a single loop.
         # Old alternative had first term, loop for middle, last term.
 
-        for t in range(finalT+1):
-            if t>0:
+        for t in range(finalT + 1):
+            if t > 0:
                 x_t = xvecs[:, [0], t].reshape(self.n, 1)
             else:
                 # For t=0, ignore all sum entries that explicitly involve x[0]
-                x_t = np.zeros((self.n,1))
-            if t<finalT:
+                x_t = np.zeros((self.n, 1))
+            if t < finalT:
                 u_t = uvecs[:, [0], t].reshape(self.m, 1)
             else:
                 # For t=Tmax, ignore all sum entries that explicitly involve u[Tmax]
@@ -606,30 +638,37 @@ class DiscreteLQR:
 
         x[:, [0], 0] = x0
         for t in range(T):
-#            x_t = x[:, 0, t].reshape(n, 1)
-            x_t = x[:, [0], t]   # 2024-06-30
-            u_t = self.K_mats[:, :, t] @ x[:, 0, t].reshape(n, 1) + self.k_vecs[:, 0, t].reshape(m, 1)
+            #            x_t = x[:, 0, t].reshape(n, 1)
+            x_t = x[:, [0], t]  # 2024-06-30
+            u_t = self.K_mats[:, :, t] @ x[:, 0, t].reshape(n, 1) + self.k_vecs[
+                :, 0, t
+            ].reshape(m, 1)
             u[:, 0, [t]] = u_t
             z_t = np.vstack((x_t, u_t))
-            x[:, 0, [t+1]] = self.F(t) @ z_t + self.f(t)
+            x[:, 0, [t + 1]] = self.F(t) @ z_t + self.f(t)
 
         x_T = x[:, 0, T].reshape(n, 1)
         u_T = np.zeros((m, 1))
         z_T = np.vstack((x_T, u_T))
 
-        lam[:,[0],T-1] = self.C(T)[0:n,0:n]@x[:,[0],T] + self.c(T)[0:n,[0]]
+        lam[:, [0], T - 1] = self.C(T)[0:n, 0:n] @ x[:, [0], T] + self.c(T)[0:n, [0]]
 
-        for s in range(T-1):
-            t = T-1-s
-            lam[:,0,[t-1]] = self.F(t)[0:n,0:n].T @ lam[:,0,[t]] + self.C(t)[0:n,0:n]@x[:,0,[t]] + self.C(t)[0:n,n:n+m]@u[:,0,[t]] + self.c(t)[0:n,[0]]
+        for s in range(T - 1):
+            t = T - 1 - s
+            lam[:, 0, [t - 1]] = (
+                self.F(t)[0:n, 0:n].T @ lam[:, 0, [t]]
+                + self.C(t)[0:n, 0:n] @ x[:, 0, [t]]
+                + self.C(t)[0:n, n : n + m] @ u[:, 0, [t]]
+                + self.c(t)[0:n, [0]]
+            )
         return x, u, lam
 
-    def V(self,x0):
+    def V(self, x0):
         """
         Return the minimum cost associated with the given initial point.
         """
-        bestx,bestu,bestlam = self.bestxul(x0)
-        return self.J(bestx,bestu)
+        bestx, bestu, bestlam = self.bestxul(x0)
+        return self.J(bestx, bestu)
 
     #########################################################################################################
     ## OPTIMIZATION -- LAGRANGE MULTIPLIER APPROACH
@@ -649,7 +688,7 @@ class DiscreteLQR:
         if self.KKT is not None:
             if self.KKT.size == Kmtxsize**2:
                 # We have already built and saved this matrix. Just return a copy.
-                return (self.KKT)
+                return self.KKT
 
         P = np.block([np.eye(n), np.zeros((n, m))])
 
@@ -657,11 +696,13 @@ class DiscreteLQR:
         t = 0
         C0_22 = self.C(0)[n:, n:]
         B0 = self.F(0)[:, n:]
-        
+
         # Writing the top two block-rows like this captures all cases where T >= 1.
-        topblock  = np.block([[ C0_22,    B0.T,                np.zeros((m,Kmtxsize-n-m))]])
-        nextblock = np.block([[B0,np.zeros((n,n)),-np.eye(n),np.zeros((n,Kmtxsize-2*n-m))]])
-        KKT = np.block([[topblock],[nextblock]])
+        topblock = np.block([[C0_22, B0.T, np.zeros((m, Kmtxsize - n - m))]])
+        nextblock = np.block(
+            [[B0, np.zeros((n, n)), -np.eye(n), np.zeros((n, Kmtxsize - 2 * n - m))]]
+        )
+        KKT = np.block([[topblock], [nextblock]])
 
         # Simple interior block rows with indices t=1,...,T-1 (seems ok for any T>0)
         for t in range(1, T):
@@ -707,10 +748,10 @@ class DiscreteLQR:
         """
         Construct RHS vector for KKT system from known elements.
         """
-#        if finalT < 0:
-#            T = self.T
-#        else:
-#            T = int(finalT)
+        #        if finalT < 0:
+        #            T = self.T
+        #        else:
+        #            T = int(finalT)
 
         T = self.Tmax
 
@@ -795,61 +836,68 @@ class DiscreteLQR:
     #########################################################################################################
     ## SENSITIVITY ANALYSIS -- GRADIENTS OF THE MINIMUM VALUE FUNCTION "V" w.r.t. DYNAMIC ELEMENTS
     #########################################################################################################
-    def sensitivity(self,x0):
+    def sensitivity(self, x0):
         T = self.Tmax
         m = self.m
         n = self.n
 
         # Use the current sensitivity matrix if applicable, otherwise build a fresh one
-        dx0 = 6.02E23  # Avogadro's Number
+        dx0 = 6.02e23  # Avogadro's Number
         if self.sol_x0 is not None:
-            dx0 = np.linalg.norm( x0 - self.sol_x0 )
+            dx0 = np.linalg.norm(x0 - self.sol_x0)
         if dx0 < np.finfo(float).eps * 100:
-            return(self.sens_mtx)
+            return self.sens_mtx
 
-        bestx,bestu,bestlam = self.bestxul(x0)
+        bestx, bestu, bestlam = self.bestxul(x0)
         self.sol_x = bestx
         self.sol_u = bestu
         self.sol_lam = bestlam
 
-        bigcore = np.vstack( (bestx[:,0,1:T], bestu[:,0,1:T], bestlam[:,0,1:T]) )
-        corecol = bigcore.reshape(((T-1)*(m+n+n),1),order='F')  # What a minefield. Stack the cols.
-        fullsol = np.vstack( (bestu[:,[0],0], bestlam[:,[0],0],corecol,bestx[:,[0],T]) )
-        
+        bigcore = np.vstack((bestx[:, 0, 1:T], bestu[:, 0, 1:T], bestlam[:, 0, 1:T]))
+        corecol = bigcore.reshape(
+            ((T - 1) * (m + n + n), 1), order="F"
+        )  # What a minefield. Stack the cols.
+        fullsol = np.vstack(
+            (bestu[:, [0], 0], bestlam[:, [0], 0], corecol, bestx[:, [0], T])
+        )
+
         self.sens_mtx = fullsol @ fullsol.T
         self.sol_x0 = x0
 
-        return(self.sens_mtx)
+        return self.sens_mtx
 
     #########################################################################################################
-    def gradctV(self,t,x0):
+    def gradctV(self, t, x0):
         T = self.Tmax
         m = self.m
         n = self.n
 
-        S = self.sensitivity(x0) # Set up or refresh the optimal trajectory we have remembered
+        S = self.sensitivity(
+            x0
+        )  # Set up or refresh the optimal trajectory we have remembered
 
         tlist = [t]
-        if self.c_vecs.ndim ==2:
+        if self.c_vecs.ndim == 2:
             # In the autonomous case, add contributions for *all* relevant t
-            tlist = [t for t in range(T+1)]
+            tlist = [t for t in range(T + 1)]
 
-        grad = np.zeros((n+m,1))
+        grad = np.zeros((n + m, 1))
 
         for t in tlist:
             if 0 < t and t < T:
-                grad[0:n,0]   += self.sol_x[:,0,t]
-                grad[n:n+m,0] += self.sol_u[:,0,t]
+                grad[0:n, 0] += self.sol_x[:, 0, t]
+                grad[n : n + m, 0] += self.sol_u[:, 0, t]
 
             if t == 0:
-                grad[n:n+m,0] += self.sol_u[:,0,t]
+                grad[n : n + m, 0] += self.sol_u[:, 0, t]
 
-            if t==T:
-                grad[0:n,0] += self.sol_x[:,0,t]
+            if t == T:
+                grad[0:n, 0] += self.sol_x[:, 0, t]
 
         return grad
+
     #########################################################################################################
-    def gradCtV(self,t,x0):
+    def gradCtV(self, t, x0):
         T = self.Tmax
         m = self.m
         n = self.n
@@ -859,39 +907,44 @@ class DiscreteLQR:
         tlist = [t]
         if self.C_mats.ndim == 2:
             # In the autonomous case, add contributions for *all* relevant t
-            tlist = [t for t in range(T+1)]
+            tlist = [t for t in range(T + 1)]
 
-        grad = np.zeros((m+n,m+n))
+        grad = np.zeros((m + n, m + n))
 
         for t in tlist:
             if 0 < t and t < T:
-                i0 = m + n + (t-1)*(m+2*n)
+                i0 = m + n + (t - 1) * (m + 2 * n)
                 j0 = i0
-                Sblock = S[i0:i0+m+n,j0:j0+m+n]
-                #if printlevel > 1:
+                Sblock = S[i0 : i0 + m + n, j0 : j0 + m + n]
+                # if printlevel > 1:
                 #    ppm.ppm(Sblock,f"Sblock_{t} starts at ({i0},{j0}),")
                 grad += Sblock / 2.0
 
             if t == 0:
-                #if printlevel > 1:
+                # if printlevel > 1:
                 #    print(f"For t={t}, focus on R_{t}.")
-                Sblock = S[0:m,0:m]
-                dVdC = np.block([[np.zeros((n,n)), np.zeros((n,m))],
-                                 [np.zeros((m,n)), Sblock]])
+                Sblock = S[0:m, 0:m]
+                dVdC = np.block(
+                    [[np.zeros((n, n)), np.zeros((n, m))], [np.zeros((m, n)), Sblock]]
+                )
                 grad += dVdC / 2.0
 
-            if t==T:
-                #if printlevel > 1:
+            if t == T:
+                # if printlevel > 1:
                 #    print(f"For t={t}, focus on Q_{t}.")
-                Sblock = S[(2*n+m)*T - n:,(2*n+m)*T - n:,]
-                dVdC = np.block([[Sblock, np.zeros((n,m))],
-                                 [np.zeros((m,n)), np.zeros((m,m))]])
+                Sblock = S[
+                    (2 * n + m) * T - n :,
+                    (2 * n + m) * T - n :,
+                ]
+                dVdC = np.block(
+                    [[Sblock, np.zeros((n, m))], [np.zeros((m, n)), np.zeros((m, m))]]
+                )
                 grad += dVdC / 2.0
 
-        return(grad)
+        return grad
 
     #########################################################################################################
-    def gradFtV(self,t,x0):
+    def gradFtV(self, t, x0):
         T = self.Tmax
         m = self.m
         n = self.n
@@ -899,239 +952,251 @@ class DiscreteLQR:
         S = self.sensitivity(x0)
 
         tlist = [t]
-        if self.F_mats.ndim ==2:
+        if self.F_mats.ndim == 2:
             # In the autonomous case, add contributions for *all* relevant t
             tlist = [t for t in range(T)]
 
-        grad = np.zeros((n,m+n))
+        grad = np.zeros((n, m + n))
 
         for t in tlist:
             if 0 < t and t < T:
-                i0 = 2*m + 2*n + (t-1)*(m+2*n)
-                j0 = (m+n) + (t-1)*(m+2*n)
-                Sblock = S[i0:i0+n,j0:j0+m+n]
-                STblock = S[j0:j0+m+n,i0:i0+n]
-                grad += (Sblock + STblock.T)/2.0
-            
+                i0 = 2 * m + 2 * n + (t - 1) * (m + 2 * n)
+                j0 = (m + n) + (t - 1) * (m + 2 * n)
+                Sblock = S[i0 : i0 + n, j0 : j0 + m + n]
+                STblock = S[j0 : j0 + m + n, i0 : i0 + n]
+                grad += (Sblock + STblock.T) / 2.0
+
             if t == 0:
-                lambda0 = self.sol_lam[:,[0],0]
+                lambda0 = self.sol_lam[:, [0], 0]
                 Ablock = lambda0 @ x0.T
                 ATblock = Ablock.T
-                gradA = (Ablock + ATblock.T)/2.0
-    
-                Bblock = S[m:m+n, 0:m]
-                BTblock = S[0:m,m:m+n]
-                gradB = (Bblock + BTblock.T)/2.0
+                gradA = (Ablock + ATblock.T) / 2.0
+
+                Bblock = S[m : m + n, 0:m]
+                BTblock = S[0:m, m : m + n]
+                gradB = (Bblock + BTblock.T) / 2.0
                 grad += np.hstack((gradA, gradB))
 
-        return(grad)
+        return grad
+
     #########################################################################################################
-    def gradftV(self,t,x0):
+    def gradftV(self, t, x0):
         T = self.Tmax
         m = self.m
         n = self.n
 
-        S = self.sensitivity(x0) # Set up or refresh the optimal trajectory we have remembered
+        S = self.sensitivity(
+            x0
+        )  # Set up or refresh the optimal trajectory we have remembered
 
         tlist = [t]
-        if self.f_vecs.ndim ==2:
+        if self.f_vecs.ndim == 2:
             # In the autonomous case, add contributions for *all* relevant t
             tlist = [t for t in range(T)]
 
-        grad = np.zeros((n,1))
+        grad = np.zeros((n, 1))
 
         for t in tlist:
-            grad[0:n,0] += self.sol_lam[:,0,t]
+            grad[0:n, 0] += self.sol_lam[:, 0, t]
 
-        return(grad)
+        return grad
+
     #########################################################################################################
-    def gradx0V(self,x0):
-        grad = self.V_mats[:,:,0] @ x0 + self.v_vecs[:,[0],0]
+    def gradx0V(self, x0):
+        grad = self.V_mats[:, :, 0] @ x0 + self.v_vecs[:, [0], 0]
         return grad
 
     #########################################################################################################
     ## SENSITIVITY ANALYSIS -- GRADIENTS OF GENERAL TRAJECTORY FUNCTION "W" w.r.t. DYNAMIC ELEMENTS
     #########################################################################################################
-    # 
-    def makeBOP(self,wx,wu,x0):
+    #
+    def makeBOP(self, wx, wu, x0):
         if self.BOP is not None:
             tol = 100 * np.finfo(float).eps
-            if np.linalg.norm(wx-self.wx)<tol  \
-            and np.linalg.norm(wu-self.wu)<tol \
-            and np.linalg.norm(x0-self.sol_x0)<tol:
-                return(self.BOP)
+            if (
+                np.linalg.norm(wx - self.wx) < tol
+                and np.linalg.norm(wu - self.wu) < tol
+                and np.linalg.norm(x0 - self.sol_x0) < tol
+            ):
+                return self.BOP
 
         # We need the nominal solution for the KKT system.
         # The backward/forward iterations find that efficiently
         _ = self.sensitivity(x0)  # Build or just recall the optimal trajectory
-        KKTsol0 = self.packxul(self.sol_x,self.sol_u,self.sol_lam)
+        KKTsol0 = self.packxul(self.sol_x, self.sol_u, self.sol_lam)
 
         # The corresponding sensitivity system has the same coefficient matrix.
         KKT = self.KKTmtx()
         # Stack coeffs of wx and wu into the right slots of the RHS vector.
-        sensrhs = self.packxul(wx,wu,np.zeros(wx.shape))
-        senssol = np.linalg.solve(KKT,sensrhs)
+        sensrhs = self.packxul(wx, wu, np.zeros(wx.shape))
+        senssol = np.linalg.solve(KKT, sensrhs)
         # ppm.ppm(senssol,"senssol, printed by function makeBOP,")
 
         # Calculate the Big Olde Product and make it part of the system object
-        self.BOP = - senssol @ KKTsol0.T
-        self.wx  = wx
-        self.wu  = wu
+        self.BOP = -senssol @ KKTsol0.T
+        self.wx = wx
+        self.wu = wu
         self.senssol = senssol
 
         return self.BOP
 
-    def packxul(self,traj_x,traj_u,traj_lam):
+    def packxul(self, traj_x, traj_u, traj_lam):
         n = traj_x.shape[0]
         m = traj_u.shape[0]
         T = traj_u.shape[2]
         # First pile x's atop u's and pad bottom with 0's:
-        midpart = np.vstack( (traj_x[:,0,1:T], traj_u[:,0,1:T], traj_lam[:,0,1:T]) )
+        midpart = np.vstack((traj_x[:, 0, 1:T], traj_u[:, 0, 1:T], traj_lam[:, 0, 1:T]))
         # Next stack the columns on top of each other, working left to right
-        corecol = midpart.reshape(((T-1)*(m+n+n),1),order='F')  # What a minefield.
+        corecol = midpart.reshape(
+            ((T - 1) * (m + n + n), 1), order="F"
+        )  # What a minefield.
         # Finally stitch on the short pieces for the top and bottom.
-        result = np.vstack( (traj_u[:,[0],0], traj_lam[:,[0],0],corecol,traj_x[:,[0],T]) )
-        return(result)
+        result = np.vstack(
+            (traj_u[:, [0], 0], traj_lam[:, [0], 0], corecol, traj_x[:, [0], T])
+        )
+        return result
 
-    def gradx0W(self,wx,wu,x0):
+    def gradx0W(self, wx, wu, x0):
         # - derivative of value W(x0) w.r.t. x0
         T = self.Tmax
         m = self.m
         n = self.n
 
-        BOP = self.makeBOP(wx,wu,x0)
-        senslam0 = self.senssol[m:m+n,[0]]
-        wx0 = wx[:,[0],0]
-        mtxA0 = self.F(0)[:,0:n]
+        BOP = self.makeBOP(wx, wu, x0)
+        senslam0 = self.senssol[m : m + n, [0]]
+        wx0 = wx[:, [0], 0]
+        mtxA0 = self.F(0)[:, 0:n]
         grad = wx0 - mtxA0.T @ senslam0
 
         return grad
 
-
-    def gradCtW(self,t,wx,wu,x0):
+    def gradCtW(self, t, wx, wu, x0):
         # - derivative of value W(x0) w.r.t. C(t)
         T = self.Tmax
         m = self.m
         n = self.n
 
-        BOP = self.makeBOP(wx,wu,x0)
+        BOP = self.makeBOP(wx, wu, x0)
 
         tlist = [t]
         if self.C_mats.ndim == 2:
             # In the autonomous case, add contributions for *all* relevant t
-            tlist = [t for t in range(T+1)]
+            tlist = [t for t in range(T + 1)]
 
-        grad = np.zeros((n+m,n+m))
+        grad = np.zeros((n + m, n + m))
         for t in tlist:
-
             if 0 < t and t < T:
-                i0 = m + n + (t-1)*(m+2*n)
+                i0 = m + n + (t - 1) * (m + 2 * n)
                 j0 = i0
-                Sblock = BOP[i0:i0+m+n,j0:j0+m+n]
-                gradCtL = Sblock / 2.0 
+                Sblock = BOP[i0 : i0 + m + n, j0 : j0 + m + n]
+                gradCtL = Sblock / 2.0
 
             if t == 0:
-                Sblock = BOP[0:m,0:m]
-                dWdC = np.block([[np.zeros((n,n)), np.zeros((n,m))],
-                                 [np.zeros((m,n)), Sblock]])
-                gradCtL = ( dWdC / 2.0 )
+                Sblock = BOP[0:m, 0:m]
+                dWdC = np.block(
+                    [[np.zeros((n, n)), np.zeros((n, m))], [np.zeros((m, n)), Sblock]]
+                )
+                gradCtL = dWdC / 2.0
 
-            if t==T:
-                Sblock = BOP[(2*n+m)*T - n:,(2*n+m)*T - n:,]
-                dWdC = np.block([[Sblock, np.zeros((n,m))],
-                                 [np.zeros((m,n)), np.zeros((m,m))]])
-                gradCtL = ( dWdC / 2.0 )
+            if t == T:
+                Sblock = BOP[
+                    (2 * n + m) * T - n :,
+                    (2 * n + m) * T - n :,
+                ]
+                dWdC = np.block(
+                    [[Sblock, np.zeros((n, m))], [np.zeros((m, n)), np.zeros((m, m))]]
+                )
+                gradCtL = dWdC / 2.0
 
-            grad += (gradCtL + gradCtL.T )
+            grad += gradCtL + gradCtL.T
 
-        return(grad)
+        return grad
 
-    def gradctW(self,t,wx,wu,x0):
+    def gradctW(self, t, wx, wu, x0):
         # - derivative of value W(x0) w.r.t. c(t)
         T = self.Tmax
         m = self.m
         n = self.n
 
-        BOP = self.makeBOP(wx,wu,x0)
-        ppm.ppm(self.senssol,f"senssol, printed in gradctW,")
+        BOP = self.makeBOP(wx, wu, x0)
+        ppm.ppm(self.senssol, f"senssol, printed in gradctW,")
 
         tlist = [t]
-        if self.c_vecs.ndim ==2:
+        if self.c_vecs.ndim == 2:
             # In the autonomous case, add contributions for *all* relevant t
-            tlist = [t for t in range(T+1)]
+            tlist = [t for t in range(T + 1)]
 
-        grad = np.zeros((n+m,1))
+        grad = np.zeros((n + m, 1))
         for t in tlist:
             if 0 < t and t < T:
-                i0 = t*(2*n+m) - n
-                grad[0:n+m,[0]] += -self.senssol[i0:i0+(n+m)]
+                i0 = t * (2 * n + m) - n
+                grad[0 : n + m, [0]] += -self.senssol[i0 : i0 + (n + m)]
 
             if t == 0:
-                grad[n:n+m,[0]] += -self.senssol[0:m,[0]]
+                grad[n : n + m, [0]] += -self.senssol[0:m, [0]]
 
-            if t==T:
-                grad[0:n,[0]] += -self.senssol[(2*n+m)*T - n:]
+            if t == T:
+                grad[0:n, [0]] += -self.senssol[(2 * n + m) * T - n :]
 
-        return(grad)
+        return grad
 
-
-    def gradFtW(self,t,wx,wu,x0):
+    def gradFtW(self, t, wx, wu, x0):
         # derivative of value W(x0) w.r.t. F(t)
         T = self.Tmax
         m = self.m
         n = self.n
 
-        BOP = self.makeBOP(wx,wu,x0)
+        BOP = self.makeBOP(wx, wu, x0)
 
         tlist = [t]
-        if self.F_mats.ndim ==2:
+        if self.F_mats.ndim == 2:
             # In the autonomous case, add contributions for *all* relevant t
             tlist = [t for t in range(T)]
 
-        grad = np.zeros((n,n+m))
+        grad = np.zeros((n, n + m))
         for t in tlist:
             if 0 < t and t < T:
-                i0 = 2*m + 2*n + (t-1)*(m+2*n)
-                j0 = (m+n) + (t-1)*(m+2*n)
-                Sblock = BOP[i0:i0+n,j0:j0+m+n]
-                STblock = BOP[j0:j0+m+n,i0:i0+n]
-                grad += 2.0*((Sblock + STblock.T)/2.0)
-            
+                i0 = 2 * m + 2 * n + (t - 1) * (m + 2 * n)
+                j0 = (m + n) + (t - 1) * (m + 2 * n)
+                Sblock = BOP[i0 : i0 + n, j0 : j0 + m + n]
+                STblock = BOP[j0 : j0 + m + n, i0 : i0 + n]
+                grad += 2.0 * ((Sblock + STblock.T) / 2.0)
+
             if t == 0:
-                ss0 = self.senssol[m:m+n]
+                ss0 = self.senssol[m : m + n]
                 gradA = -ss0 @ x0.T
 
-                Bblock = BOP[m:m+n, 0:m]
-                BTblock = BOP[0:m,m:m+n]
+                Bblock = BOP[m : m + n, 0:m]
+                BTblock = BOP[0:m, m : m + n]
                 gradB = Bblock + BTblock.T
-                grad += np.hstack((gradA,gradB))
+                grad += np.hstack((gradA, gradB))
 
         return grad
 
-    def gradftW(self,t,wx,wu,x0):
+    def gradftW(self, t, wx, wu, x0):
         # - derivative of value W(x0) w.r.t. f(t)
         T = self.Tmax
         m = self.m
         n = self.n
 
-        BOP = self.makeBOP(wx,wu,x0)
+        BOP = self.makeBOP(wx, wu, x0)
 
         # ppm.ppm(self.senssol,f"senssol, printed in gradftW,")
 
         tlist = [t]
-        if self.f_vecs.ndim ==2:
+        if self.f_vecs.ndim == 2:
             # In the autonomous case, add contributions for *all* relevant t
             tlist = [t for t in range(T)]
 
-        grad = np.zeros((n,1))   # Container for result to return
+        grad = np.zeros((n, 1))  # Container for result to return
 
         for t in tlist:
             if 0 < t and t < T:
-                i0 = t*(2*n+m) + m
-                grad[:,[0]] += -self.senssol[i0:i0+n,[0]]
+                i0 = t * (2 * n + m) + m
+                grad[:, [0]] += -self.senssol[i0 : i0 + n, [0]]
 
             if t == 0:
-                grad[:,[0]] += -self.senssol[m:m+n,[0]]
+                grad[:, [0]] += -self.senssol[m : m + n, [0]]
 
         return grad
 
@@ -1151,16 +1216,16 @@ class DiscreteLQR:
         print(f"c_vecs.shape = {self.c_vecs.shape}.")
 
         tlist = range(self.T)
-        if self.F_mats.ndim ==2:
+        if self.F_mats.ndim == 2:
             tlist = [0]
             print("\nAll matrices F_t are the same. Here's a representative.")
         else:
             print(" ")
         for t in tlist:
-            ppm.ppm(self.F(t) ,f"F_{t:d} = [A_{t:d}  B_{t:d}]")
+            ppm.ppm(self.F(t), f"F_{t:d} = [A_{t:d}  B_{t:d}]")
 
         tlist = range(self.T)
-        if self.f_vecs.ndim ==2:
+        if self.f_vecs.ndim == 2:
             tlist = [0]
             print("\nAll vectors f_t are the same. Here's a representative.")
         else:
@@ -1168,19 +1233,23 @@ class DiscreteLQR:
         for t in tlist:
             ppm.ppm(self.f(t), f"f_{t:d}")
 
-        tlist = range(1+self.T)
-        if self.C_mats.ndim ==2:
-            print(f"\nAll matrices C_t are the same, except for tweaks to C_0 and C_{self.T}.")
-            tlist = sorted(set([0,1,self.T]))
+        tlist = range(1 + self.T)
+        if self.C_mats.ndim == 2:
+            print(
+                f"\nAll matrices C_t are the same, except for tweaks to C_0 and C_{self.T}."
+            )
+            tlist = sorted(set([0, 1, self.T]))
         else:
             print(" ")
         for t in tlist:
             ppm.ppm(self.C(t), f"C_{t:d}")
 
-        tlist = range(1+self.T)
-        if self.c_vecs.ndim ==2:
-            print(f"\nAll vectors c_t are the same, except for tweaks to c_0 and c_{self.T}.")
-            tlist = sorted(set([0,1,self.T]))
+        tlist = range(1 + self.T)
+        if self.c_vecs.ndim == 2:
+            print(
+                f"\nAll vectors c_t are the same, except for tweaks to c_0 and c_{self.T}."
+            )
+            tlist = sorted(set([0, 1, self.T]))
         else:
             print(" ")
         for t in tlist:
