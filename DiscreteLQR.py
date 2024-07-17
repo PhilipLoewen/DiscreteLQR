@@ -2,7 +2,6 @@ import copy
 import numpy as np
 import PrettyPrinter as ppm
 
-
 class DiscreteLQR:
     """
     Record the defining properties and calculate key features
@@ -128,6 +127,12 @@ class DiscreteLQR:
     To get the optimal trajectory for a given initial point,
     use the method "bestxul".
 
+    ## THE VALUE FUNCTION ##
+
+    A system object has a method that returns the minimum cost from any
+    initial state, namely
+        V(x0) - scalar value of V at point x0, where x0 is an n-by-1 2D array.
+
     ## VALUE FUNCTION GRADIENTS ##
 
     Method list: Let V(x0) denote the minimum value in the optimization problem
@@ -178,6 +183,7 @@ class DiscreteLQR:
     for debugging in the future.
 
     Philip D Loewen,
+    ... 2024-07-16: Get V(x0) from the initial setup, no trajectory needed!
     ... 2024-07-04: Improve sensitivity functions for the autonomous case
     ... 2024-07-03: Finish some sensitivity functions and testing
     ... 2024-06-30: Check details for the non-apology above
@@ -615,6 +621,15 @@ class DiscreteLQR:
     #########################################################################################################
     ## OPTIMIZATION -- FORWARD/BACKWARD ITERATIONS DEFINE AN OPTIMAL TRAJECTORY AND ITS ASSOCIATED VALUE
     #########################################################################################################
+    def V(self,x0):
+        """
+        Return the minimum cost of a trajectory starting from the point x0.
+        """
+        # print(f"V_mats.shape = {self.V_mats.shape}; v_vecs.shape = {self.v_vecs.shape}.")
+        mincost = 0.5 * x0.T @ self.V_mats[:,:,0] @ x0 + self.v_vecs[:,[0],0].T @ x0 + self.beta[0]
+        # print(f"mincost = {mincost}")
+        return( mincost[0,0] )
+
     def bestxul(self, x0):
         """
         Find optimal state and control sequences and multipliers,
@@ -662,13 +677,6 @@ class DiscreteLQR:
                 + self.c(t)[0:n, [0]]
             )
         return x, u, lam
-
-    def V(self, x0):
-        """
-        Return the minimum cost associated with the given initial point.
-        """
-        bestx, bestu, bestlam = self.bestxul(x0)
-        return self.J(bestx, bestu)
 
     #########################################################################################################
     ## OPTIMIZATION -- LAGRANGE MULTIPLIER APPROACH
