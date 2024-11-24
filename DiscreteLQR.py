@@ -886,6 +886,33 @@ class DiscreteLQR:
         )
         return result
 
+    def kkt2xul(self, x0, KKTsol):
+        """
+        Break apart the tall column-vector solving the KKT system into
+        separate containers of standard form for the state, control,
+        and multipliers. Notes:
+          * the KKT solution does not include the initial state x0,
+            so that must be provided separately, and
+          * the control dimension m and step-count T cannot be reliably
+            inferred from x0 and KKTsol only, so we look them up in the
+            known characteristics of the system object.
+        """
+        n = self.n
+        m = self.m
+        T = self.T
+        KKTx = np.zeros((n, 1, T + 1))
+        KKTu = np.zeros((m, 1, T))
+        KKTl = np.zeros((n, 1, T))
+
+        KKTx[:, [0], 0] = x0.reshape(n, 1)
+        for r in range(0, T):
+            KKTu[:, [0], r] = KKTsol[r * (m + 2 * n) : r * (m + 2 * n) + m, :]
+            KKTl[:, [0], r] = KKTsol[(m + r * (m + 2 * n)) : (m + r * (m + 2 * n) + n), :][:]
+            KKTx[:, [0], r + 1] = KKTsol[
+                (m + n + r * (m + 2 * n)) : (m + n + r * (m + 2 * n) + n), :
+            ][:]
+        return (KKTx, KKTu, KKTl)
+
     #########################################################################################################
     ## SENSITIVITY ANALYSIS -- GRADIENTS OF THE MINIMUM VALUE FUNCTION "V" w.r.t. DYNAMIC ELEMENTS
     #########################################################################################################

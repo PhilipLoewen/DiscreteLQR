@@ -194,17 +194,7 @@ if True:
         ppm.ppm(w, "KKT solution vector w")
 
     # Extract components of solution vector w into standard-format arrays
-    KKTx = np.zeros((n, 1, T + 1))
-    KKTu = np.zeros((m, 1, T))
-    KKTl = np.zeros((n, 1, T))
-
-    KKTx[:, [0], 0] = x0.reshape(n, 1)
-    for r in range(0, T):
-        KKTu[:, [0], r] = w[r * (m + 2 * n) : r * (m + 2 * n) + m, :]
-        KKTl[:, [0], r] = w[(m + r * (m + 2 * n)) : (m + r * (m + 2 * n) + n), :][:]
-        KKTx[:, [0], r + 1] = w[
-            (m + n + r * (m + 2 * n)) : (m + n + r * (m + 2 * n) + n), :
-        ][:]
+    KKTx, KKTu, KKTl = myLQRsystem.kkt2xul(x0,w)  # SUPERCEDES PREVIOUS BLOCK
 
     # ppm.ppm(KKTx,"KKTx") # Unhide these to see the explicit internal representations
     # ppm.ppm(KKTu,"KKTu")
