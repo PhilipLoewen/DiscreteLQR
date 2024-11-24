@@ -342,7 +342,7 @@ class DiscreteLQR:
         self.BOPwu = None
         self.senssol = None
 
-        # Run the forward iterations detailed in the theoretical writeup.
+        # Run the backward pass detailed in the theoretical writeup.
         # Critical ingredients of the system description that this produces are ...
         #   K_mats ... shape (m,n,T)
         #   k_vecs ... shape (m,,1t)
@@ -402,19 +402,15 @@ class DiscreteLQR:
 
             if False:
                 # Print for debugging.
-                print(f"\nAt stage t={t}, here are C(t), F(t), c(t), f(t)")
-                print(self.C(t))
-                print(self.F(t))
-                print(self.c(t))
-                print(self.f(t))
-
-                print(f"\nAt stage t={t}, here are V(t+1), v(t+1)")
-                print(V_mats[:, :, t + 1])
-                print(v_vecs[:, t + 1])
-
-                print(f"\nAt stage t={t}, here are Q and q.")
-                print(Q)
-                print(q)
+                print(f"\nReport from stage t={t}:")
+                ppm.ppm(self.C(t),f"C({t})")
+                ppm.ppm(self.F(t),f"F({t})")
+                ppm.ppm(c,f"c({t})")
+                ppm.ppm(f,f"f({t})")
+                ppm.ppm(V,f"V({t+1})")
+                ppm.ppm(v,f"v({t+1})")
+                ppm.ppm(Q,f"Q({t})")
+                ppm.ppm(q,f"q({t})")
 
             Q_xx = Q[: self.n, : self.n]
             Q_ux = Q[self.n :, : self.n]
@@ -1101,7 +1097,7 @@ class DiscreteLQR:
                 return self.BOP
 
         # We need the nominal solution for the KKT system.
-        # The backward/forward iterations find that efficiently
+        # The backward/forward passes find that efficiently
         _ = self.sensitivity(x0)  # Build or just recall the optimal trajectory
         KKTsol0 = self.xul2kkt(self.sol_x, self.sol_u, self.sol_lam)
 
