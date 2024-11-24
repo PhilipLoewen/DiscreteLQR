@@ -444,7 +444,7 @@ class DiscreteLQR:
 
             beta[t] = b
 
-        self.Q_matx = Q_mats
+        self.Q_mats = Q_mats
         self.q_vecs = q_vecs
         self.K_mats = K_mats
         self.k_vecs = k_vecs
