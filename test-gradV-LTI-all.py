@@ -1,4 +1,4 @@
-# 2024-07-04 [PDL]
+# 2024-11-23 [PDL]
 
 # Consider a time-varying LQR setup with simplified dynamics
 #    x[t+1] = A[t] x[t] + B[t] u[t]
@@ -70,25 +70,6 @@ C0 = np.block(
         [np.zeros((m, n)), np.around(R0, decimals=2)],
     ]
 )
-
-
-#######################################################################
-# Utility function packs x, u, lambda into a KKT-compatible column
-#######################################################################
-def packxul(traj_x, traj_u, traj_lam):
-    T = traj_u.shape[2]
-    # First pile x's atop u's and pad bottom with 0's:
-    midpart = np.vstack((traj_x[:, 0, 1:T], traj_u[:, 0, 1:T], traj_lam[:, 0, 1:T]))
-    # Next stack the columns on top of each other, working left to right
-    corecol = midpart.reshape(
-        ((T - 1) * (m + n + n), 1), order="F"
-    )  # What a minefield.
-    # Finally stitch on the short pieces for the top and bottom.
-    result = np.vstack(
-        (traj_u[:, [0], 0], traj_lam[:, [0], 0], corecol, traj_x[:, [0], T])
-    )
-    return result
-
 
 #######################################################################
 # Build nominal system and print its key ingredients

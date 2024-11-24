@@ -93,25 +93,6 @@ if False:
     f0 = np.random.rand(n, 1)
     f = f0
 
-
-#######################################################################
-# Utility function packs x, u, lambda into a KKT-compatible column
-#######################################################################
-def packxul(traj_x, traj_u, traj_lam):
-    T = traj_u.shape[2]
-    # First pile x's atop u's and pad bottom with 0's:
-    midpart = np.vstack((traj_x[:, 0, 1:T], traj_u[:, 0, 1:T], traj_lam[:, 0, 1:T]))
-    # Next stack the columns on top of each other, working left to right
-    corecol = midpart.reshape(
-        ((T - 1) * (m + n + n), 1), order="F"
-    )  # What a minefield.
-    # Finally stitch on the short pieces for the top and bottom.
-    result = np.vstack(
-        (traj_u[:, [0], 0], traj_lam[:, [0], 0], corecol, traj_x[:, [0], T])
-    )
-    return result
-
-
 #######################################################################
 # Build nominal system and print its key ingredients
 #######################################################################
@@ -135,7 +116,7 @@ for t in range(T + 1):
 print(" ")
 
 bestx, bestu, bestlam = sys0.bestxul(x0)
-# KKTsol0 = packxul(bestx,bestu,bestlam)
+# KKTsol0 = sys0.xul2kkt(bestx,bestu,bestlam)
 
 #######################################################################
 # Invent coefficients for a suitable linear function W=W(C,F,x0).

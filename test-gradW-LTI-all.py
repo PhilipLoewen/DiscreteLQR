@@ -81,25 +81,6 @@ wu = np.random.rand(m, 1, T) * 10
 ppm.ppm(wx, "wx, giving coefficients for x,")
 ppm.ppm(wu, "wu, giving coefficients for u,")
 
-
-#######################################################################
-# Utility function packs x, u, lambda into a KKT-compatible column
-#######################################################################
-def packxul(traj_x, traj_u, traj_lam):
-    T = traj_u.shape[2]
-    # First pile x's atop u's and pad bottom with 0's:
-    midpart = np.vstack((traj_x[:, 0, 1:T], traj_u[:, 0, 1:T], traj_lam[:, 0, 1:T]))
-    # Next stack the columns on top of each other, working left to right
-    corecol = midpart.reshape(
-        ((T - 1) * (m + n + n), 1), order="F"
-    )  # What a minefield.
-    # Finally stitch on the short pieces for the top and bottom.
-    result = np.vstack(
-        (traj_u[:, [0], 0], traj_lam[:, [0], 0], corecol, traj_x[:, [0], T])
-    )
-    return result
-
-
 #######################################################################
 # Build nominal system and print its key ingredients
 #######################################################################

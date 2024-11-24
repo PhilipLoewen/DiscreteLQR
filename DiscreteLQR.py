@@ -183,6 +183,7 @@ class DiscreteLQR:
     for debugging in the future.
 
     Philip D Loewen,
+    ... 2024-11-23: Remember more internal elements from the forward pass in __init__
     ... 2024-07-16: Get V(x0) from the initial setup, no trajectory needed!
     ... 2024-07-04: Improve sensitivity functions for the autonomous case
     ... 2024-07-03: Finish some sensitivity functions and testing
@@ -316,14 +317,17 @@ class DiscreteLQR:
                 pass
         self.T = self.Tmax
 
-        # Sometimes we are interested in the KKT matrix, but that only needs to be built once.
-        # Declare the name and assign it the value "None" until it gets calculated.
+        # Sometimes we are interested in the KKT matrix, 
+        # but that only needs to be built once (or perhaps never).
+        # Declare the name and assign it the default value "None".
         self.KKT = None
 
-        # Reserve space for the sensitivity matrix. This depends on the initial point x0.
-        # If x0 is a n-by-1 array, it means we have recorded an optimal trajectory and
-        # built the corresponding sensitivity matrix for that x0.
+        # Reserve space for the sensitivity matrix.
+        # This depends on the initial point x0. In code, we use the default value None.
         # If x0 is None, these elements are not yet ready. They get built on first request.
+        # If x0 is a n-by-1 array, it means our system object contains an 
+        # optimal trajectory and its basic-form sensitivity matrix for that x0.
+
         self.sol_x0 = None
         self.sol_x = None
         self.sol_u = None
@@ -338,30 +342,39 @@ class DiscreteLQR:
         self.BOPwu = None
         self.senssol = None
 
-        # Now build the whole feedback structure
-        #
-        # Compute time-varying optimal LQR control feedback coefficients.
-        # :parameter  finalT: Upper index in objective, which is
-        #                sum( 0.5*z[t]'*C[t]*z[t] + c[t]'*z[t],t=0,...,T)
-        # :return (K,k,V,v): 4-tuple in which K has shape (m,n,T), k has shape (m,t), and the optimal
-        #                input for index t will be  u_t = K[:,:,t]@x_t + k[:,t], t=0,1,...,T-1.
-        #                Note that the objective sum has T+1 terms, but we only need T feedback
-        #                coefficients to build it ... so that's all we compute and return.
-        #                Return value V has shape (n,n,T+1) and v has shape (n,T+1).
-        #                Probably only V[:,:,0] and v[:,0] are relevant, but we have them all.
+        # Run the forward iterations detailed in the theoretical writeup.
+        # Critical ingredients of the system description that this produces are ...
+        #   K_mats ... shape (m,n,T)
+        #   k_vecs ... shape (m,,1t)
+        # (the optimal input for index t will be  u_t = K[:,:,t]@x_t + k[:,t], t=0,1,...,T-1)
+        #   V_mats ... shape (n,n,T+1)
+        #   v_vecs ... shape (n,1,T+1)
+        #   beta   ... shape (T+1)
+        # (so the optimal value from any starting point is easy to calculate)
+        #   Q_mats ... shape (m+n,m+n,T-1)
+        #   q_vecs ... shape (m+n,1,T-1)
+        # Note that the matrix collections named for K, Q, and V
+        # are all independent of both the initial state and the
+        # coefficients of the linear terms in the problem setup.
+        # 
+        # The objective sum has T+1 terms, but we only need T feedback
+        # coefficients to evaluate it ... so that's all we compute and return.
 
-        # The state-value function is a quadratic, defined for each subscript t=0,1,...,T.
-        # Build up the whole thing here, and save it as an attribute of the object later.
-
-        V_mats = np.zeros((self.n, self.n, self.T + 1))
-        v_vecs = np.zeros((self.n, 1, self.T + 1))
+        Q_mats = np.zeros((self.m+self.n, self.m+self.n, self.T))
+        q_vecs = np.zeros((self.m+self.n, 1, self.T))
 
         K_mats = np.zeros((self.m, self.n, self.T))
         k_vecs = np.zeros((self.m, 1, self.T))
 
+        V_mats = np.zeros((self.n, self.n, self.T + 1))
+        v_vecs = np.zeros((self.n, 1, self.T + 1))
+
         beta = np.zeros(self.T + 1)
 
         T = self.T
+
+        # Set up for backward iteration by declaring values for t=T:
+
         V_mats[:, :, T] = self.C(T)[: self.n, : self.n]
         v_vecs[:, 0, T:] = self.c(T)[: self.n, [0]]
         beta[T] = 0.0  # Redundant but readable
@@ -387,8 +400,6 @@ class DiscreteLQR:
             # )
             q = c + F.T @ V @ f + F.T @ v
 
-            gamma = beta[t + 1] + v.T @ f + 0.5 * f.T @ V @ f
-
             if False:
                 # Print for debugging.
                 print(f"\nAt stage t={t}, here are C(t), F(t), c(t), f(t)")
@@ -409,24 +420,32 @@ class DiscreteLQR:
             Q_ux = Q[self.n :, : self.n]
             Q_xu = Q[: self.n, self.n :]
             Q_uu = Q[self.n :, self.n :]
-            Q_uu_inv = np.linalg.inv(Q_uu)
 
             q_x = q[: self.n].reshape(self.n, 1)
             q_u = q[self.n :].reshape(self.m, 1)
 
-            K = -Q_uu_inv @ Q_ux
-            k = (-Q_uu_inv @ q_u).reshape(self.m, 1)
+            K = -np.linalg.solve(Q_uu, Q_ux)
+            k = -np.linalg.solve(Q_uu, q_u).reshape(self.m, 1)
 
-            b = beta[t + 1] - 0.5 * q_u.T @ Q_uu_inv @ q_u + 0.5 * f.T @ V @ f + v.T @ f
+            b = beta[t + 1] + 0.5 * q_u.T @ k + 0.5 * f.T @ V @ f + v.T @ f
 
-            V_mats[:, :, t] = Q_xx - K.T @ Q_uu @ K
-            v_vecs[:, 0, [t]] = q_x + Q_xu @ k
+            # Remember all these things as part of the system object.
+            # Some of them may be re-used for later sensitivity calculations
+            # of form gradW...
+
+            Q_mats[:, :, t] = Q
+            q_vecs[:, 0, [t]] = q
 
             K_mats[:, :, t] = K
             k_vecs[:, 0, [t]] = k
 
+            V_mats[:, :, t] = Q_xx - K.T @ Q_uu @ K
+            v_vecs[:, 0, [t]] = q_x + Q_xu @ k
+
             beta[t] = b
 
+        self.Q_matx = Q_mats
+        self.q_vecs = q_vecs
         self.K_mats = K_mats
         self.k_vecs = k_vecs
         self.V_mats = V_mats
@@ -841,6 +860,32 @@ class DiscreteLQR:
 
         return RHS
 
+
+    #########################################################################################################
+    ## INTERFACE BETWEEN DIRECT APPROACH AND KKT METHOD ... CONVERT SOLUTION REPRESENTATIONS
+    #########################################################################################################
+
+    def xul2kkt(self, traj_x, traj_u, traj_lam):
+        '''
+        Stack optimal control-state trajectories and Lagrange multipliers
+        into a tall column vector compatible with the KKT matrix system
+        detailed in the accompanying theoretical notes.
+        '''
+        n = traj_x.shape[0]
+        m = traj_u.shape[0]
+        T = traj_u.shape[2]
+        # First pile x's atop u's and pad bottom with 0's:
+        midpart = np.vstack((traj_x[:, 0, 1:T], traj_u[:, 0, 1:T], traj_lam[:, 0, 1:T]))
+        # Next stack the columns on top of each other, working left to right
+        corecol = midpart.reshape(
+            ((T - 1) * (m + n + n), 1), order="F"
+        )  # What a minefield.
+        # Finally stitch on the short pieces for the top and bottom.
+        result = np.vstack(
+            (traj_u[:, [0], 0], traj_lam[:, [0], 0], corecol, traj_x[:, [0], T])
+        )
+        return result
+
     #########################################################################################################
     ## SENSITIVITY ANALYSIS -- GRADIENTS OF THE MINIMUM VALUE FUNCTION "V" w.r.t. DYNAMIC ELEMENTS
     #########################################################################################################
@@ -850,7 +895,7 @@ class DiscreteLQR:
         n = self.n
 
         # Use the current sensitivity matrix if applicable, otherwise build a fresh one
-        dx0 = 6.02e23  # Avogadro's Number
+        dx0 = 6.02e23  # Avogadro's Number. Geeky joke: any enormous scalar will do.
         if self.sol_x0 is not None:
             dx0 = np.linalg.norm(x0 - self.sol_x0)
         if dx0 < np.finfo(float).eps * 100:
@@ -1031,12 +1076,12 @@ class DiscreteLQR:
         # We need the nominal solution for the KKT system.
         # The backward/forward iterations find that efficiently
         _ = self.sensitivity(x0)  # Build or just recall the optimal trajectory
-        KKTsol0 = self.packxul(self.sol_x, self.sol_u, self.sol_lam)
+        KKTsol0 = self.xul2kkt(self.sol_x, self.sol_u, self.sol_lam)
 
         # The corresponding sensitivity system has the same coefficient matrix.
         KKT = self.KKTmtx()
         # Stack coeffs of wx and wu into the right slots of the RHS vector.
-        sensrhs = self.packxul(wx, wu, np.zeros(wx.shape))
+        sensrhs = self.xul2kkt(wx, wu, np.zeros(wx.shape))
         senssol = np.linalg.solve(KKT, sensrhs)
         # ppm.ppm(senssol,"senssol, printed by function makeBOP,")
 
@@ -1048,21 +1093,6 @@ class DiscreteLQR:
 
         return self.BOP
 
-    def packxul(self, traj_x, traj_u, traj_lam):
-        n = traj_x.shape[0]
-        m = traj_u.shape[0]
-        T = traj_u.shape[2]
-        # First pile x's atop u's and pad bottom with 0's:
-        midpart = np.vstack((traj_x[:, 0, 1:T], traj_u[:, 0, 1:T], traj_lam[:, 0, 1:T]))
-        # Next stack the columns on top of each other, working left to right
-        corecol = midpart.reshape(
-            ((T - 1) * (m + n + n), 1), order="F"
-        )  # What a minefield.
-        # Finally stitch on the short pieces for the top and bottom.
-        result = np.vstack(
-            (traj_u[:, [0], 0], traj_lam[:, [0], 0], corecol, traj_x[:, [0], T])
-        )
-        return result
 
     def gradx0W(self, wx, wu, x0):
         # - derivative of value W(x0) w.r.t. x0
