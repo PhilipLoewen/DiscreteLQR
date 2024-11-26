@@ -1,4 +1,4 @@
-# 2024-07-03 [PDL]
+# 2024-11-25 [PDL]
 
 # Consider a time-varying LQR setup with simplified dynamics
 #    x[t+1] = A[t] x[t] + B[t] u[t]
@@ -35,6 +35,7 @@ T = 3  # Literal final time, interesting subscripts are 0,...,T
 
 # Pick an initial state at random:
 x0 = np.around(np.random.rand(n, 1), decimals=1).reshape(n, 1)
+x0 = np.zeros((n, 1))  # TODO - temporary intervention
 
 # Pick a number from 0 to 5 inclusive to control diagnostic output:
 printlevel = 0
@@ -49,12 +50,9 @@ def diagprint(q, string):
 # Instantiate a random system with the parameters above.
 # (This mentions some elements not anticipated in the intro.)
 
-
-# Dynamic shift and linear cost terms
+# Dynamic shift and linear cost terms for the nominal system
 f0 = np.random.rand(n, 1, T)  # columns for indices 0,1,...,T-1
 c0 = np.random.rand(n + m, 1, T + 1)  # columns for t=0,1,...,T
-f = f0
-c = c0
 
 # Main dynamic matrices are just random
 F0 = np.random.rand(n, n + m, T) * 10
@@ -89,9 +87,7 @@ if False:
     F0 = np.hstack((A0, B0))
     C0 = C0[:, :, 0]
     c0 = np.random.rand(n + m, 1)
-    c = c0
     f0 = np.random.rand(n, 1)
-    f = f0
 
 #######################################################################
 # Build nominal system and print its key ingredients
@@ -124,8 +120,41 @@ bestx, bestu, bestlam = sys0.bestxul(x0)
 wx = np.random.rand(*bestx.shape) * 10
 wu = np.random.rand(*bestu.shape) * 10
 
+# TODO - 2024-11-25. Check alignment of everything by
+# changing wx, wu to exactly what one might expect in
+# the original KKT system.
+wx = np.zeros((n,1,1+T))
+wu = np.zeros((m,1,T))
+
+cfcf = sys0.KKTrhs(np.zeros((n,1))) 
+
+wu[: m,[0],[0]] = cfcf[: m]
+for t in range(1,T):
+    i0 = m+n + (t-1)*(m+2*n)
+    wx[:,[0],[t]] = cfcf[i0:i0+n]
+    wu[:,[0],[t]] = cfcf[i0+n:i0+m+n]
+i0 = (m+2*n)*T - n
+wx[:,[0],[T]] = cfcf[i0:i0+n]
+
+wx = -wx
+wu = -wu
+# TODO - intervention ends here
+
 ppm.ppm(wx, "wx, giving coefficients for x,")
 ppm.ppm(wu, "wu, giving coefficients for u,")
+
+#######################################################################
+# Echo nominal solution
+#######################################################################
+print(f"\n{10*'*':s} Optimal Trajectory for Nominal System{10*'*':s}")
+
+bestx0, bestu0, bestlam0 = sys0.bestxul(x0)
+J0 = sys0.J(bestx0,bestu0)
+
+print(f"\nMinimum cost is {J0:6.1e}.\n")
+ppm.ppm(bestx0[:,0,:],"showing state sequence (by cols)")
+ppm.ppm(bestu0[:,0,:],"showing control sequence (by cols)")
+ppm.ppm(bestlam0[:,0,:],"showing multiplier sequence (by cols)")
 
 tolvals = []
 tolstrs = []
@@ -180,7 +209,7 @@ for t in range(T):
         # Input is a square symmetric matrix, (n+m)x(n+m)
         Cmod = copy.deepcopy(C0)
         Cmod[:, :, t] = Ct
-        mysys = mylqr.DiscreteLQR(Cmod, c, F0, f)
+        mysys = mylqr.DiscreteLQR(Cmod, c0, F0, f0)
         bestx, bestu, bestlam = mysys.bestxul(x0)
         return np.tensordot(wx[:, 0, :], bestx[:, 0, :]) + np.tensordot(
             wu[:, 0, :], bestu[:, 0, :]
@@ -226,7 +255,7 @@ for t in range(T):
         # Input is a tall skinny matrix, (n+m)x(1)
         cmod = copy.deepcopy(c0)
         cmod[:, :, t] = ct
-        mysys = mylqr.DiscreteLQR(C0, cmod, F0, f)
+        mysys = mylqr.DiscreteLQR(C0, cmod, F0, f0)
         bestx, bestu, bestlam = mysys.bestxul(x0)
         return np.tensordot(wx[:, 0, :], bestx[:, 0, :]) + np.tensordot(
             wu[:, 0, :], bestu[:, 0, :]
@@ -272,7 +301,7 @@ for t in range(T):
         # Input is a square symmetric matrix, (n+m)x(n+m)
         Fmod = copy.deepcopy(F0)
         Fmod[:, :, t] = Ft
-        mysys = mylqr.DiscreteLQR(C0, c, Fmod, f)
+        mysys = mylqr.DiscreteLQR(C0, c0, Fmod, f0)
         bestx, bestu, bestlam = mysys.bestxul(x0)
         return np.tensordot(wx[:, 0, :], bestx[:, 0, :]) + np.tensordot(
             wu[:, 0, :], bestu[:, 0, :]
