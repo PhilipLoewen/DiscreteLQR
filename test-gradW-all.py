@@ -35,7 +35,7 @@ T = 3  # Literal final time, interesting subscripts are 0,...,T
 
 # Pick an initial state at random:
 x0 = np.around(np.random.rand(n, 1), decimals=1).reshape(n, 1)
-x0 = np.zeros((n, 1))  # TODO - temporary intervention
+# x0 = np.zeros((n, 1))  # TODO - temporary intervention
 
 # Pick a number from 0 to 5 inclusive to control diagnostic output:
 printlevel = 0
@@ -120,25 +120,26 @@ bestx, bestu, bestlam = sys0.bestxul(x0)
 wx = np.random.rand(*bestx.shape) * 10
 wu = np.random.rand(*bestu.shape) * 10
 
-# TODO - 2024-11-25. Check alignment of everything by
-# changing wx, wu to exactly what one might expect in
-# the original KKT system.
-wx = np.zeros((n,1,1+T))
-wu = np.zeros((m,1,T))
+if False:
+    # TODO - 2024-11-25. Check alignment of everything by
+    # changing wx, wu to exactly what one might expect in
+    # the original KKT system.
+    wx = np.zeros((n,1,1+T))
+    wu = np.zeros((m,1,T))
 
-cfcf = sys0.KKTrhs(np.zeros((n,1))) 
+    cfcf = sys0.KKTrhs(np.zeros((n,1))) 
 
-wu[: m,[0],[0]] = cfcf[: m]
-for t in range(1,T):
-    i0 = m+n + (t-1)*(m+2*n)
-    wx[:,[0],[t]] = cfcf[i0:i0+n]
-    wu[:,[0],[t]] = cfcf[i0+n:i0+m+n]
-i0 = (m+2*n)*T - n
-wx[:,[0],[T]] = cfcf[i0:i0+n]
+    wu[: m,[0],[0]] = cfcf[: m]
+    for t in range(1,T):
+        i0 = m+n + (t-1)*(m+2*n)
+        wx[:,[0],[t]] = cfcf[i0:i0+n]
+        wu[:,[0],[t]] = cfcf[i0+n:i0+m+n]
+    i0 = (m+2*n)*T - n
+    wx[:,[0],[T]] = cfcf[i0:i0+n]
 
-wx = -wx
-wu = -wu
-# TODO - intervention ends here
+    wx = -wx
+    wu = -wu
+    # TODO - intervention ends here
 
 ppm.ppm(wx, "wx, giving coefficients for x,")
 ppm.ppm(wu, "wu, giving coefficients for u,")
