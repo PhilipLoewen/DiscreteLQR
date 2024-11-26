@@ -183,7 +183,7 @@ class DiscreteLQR:
     for debugging in the future.
 
     Philip D Loewen,
-    ... 2024-11-23: Remember more internal elements from the forward pass in __init__
+    ... 2024-11-23: Remember more internal elements from the backward pass in __init__
     ... 2024-07-16: Get V(x0) from the initial setup, no trajectory needed!
     ... 2024-07-04: Improve sensitivity functions for the autonomous case
     ... 2024-07-03: Finish some sensitivity functions and testing
@@ -332,9 +332,6 @@ class DiscreteLQR:
         self.sol_x = None
         self.sol_u = None
         self.sol_lam = None
-        self.sens_mtx = np.zeros(
-            ((2 * self.n + self.m) * self.T, (2 * self.n + self.m) * self.T)
-        )
 
         # Reserve space for the Big Olde Product matrix used for general sensitivity calculations.
         self.BOP = None
@@ -636,27 +633,28 @@ class DiscreteLQR:
     #########################################################################################################
     ## OPTIMIZATION -- FORWARD/BACKWARD ITERATIONS DEFINE AN OPTIMAL TRAJECTORY AND ITS ASSOCIATED VALUE
     #########################################################################################################
-    def V(self,x0):
-        """
-        Return the minimum cost of a trajectory starting from the point x0.
-        """
-        # print(f"V_mats.shape = {self.V_mats.shape}; v_vecs.shape = {self.v_vecs.shape}.")
-        mincost = 0.5 * x0.T @ self.V_mats[:,:,0] @ x0 + self.v_vecs[:,[0],0].T @ x0 + self.beta[0]
-        # print(f"mincost = {mincost}")
-        return( mincost[0,0] )
-
     def bestxul(self, x0):
         """
         Find optimal state and control sequences and multipliers,
-        given initial state. Use planning duration from initial setup.
+        given initial state.
 
         :param x0:  (n,1) array. The initial state.
         :return:    tuple (x,u,lam), where ...
-                           x is an array of shape (n,T+1),
-                           u is an array of shape (m,T),
-                           lam is an array of shape (n,T).
-        (Couldn't use lambda for a variable name, because it's a Python keyword.)
+                           x is an array of shape (n,1,T+1),
+                           u is an array of shape (m,1,T),
+                           lam is an array of shape (n,1,T).
+        (Can't use lambda for a variable name, because it's a Python keyword.)
         """
+
+        # Skip all the work below if the results are already on file:
+        dx0 = 6.02e23  # Avogadro's Number. Geeky joke: any enormous scalar will do.
+        if self.sol_x0 is not None:
+            dx0 = np.linalg.norm(x0 - self.sol_x0)
+        if dx0 < np.finfo(float).eps * 100:
+            if self.sol_x is not None \
+            and self.sol_u is not None \
+            and self.sol_lam is not None:
+                return self.sol_x, self.sol_u, self.sol_lam
 
         m = self.m
         n = self.n
@@ -691,8 +689,22 @@ class DiscreteLQR:
                 + self.C(t)[0:n, n : n + m] @ u[:, 0, [t]]
                 + self.c(t)[0:n, [0]]
             )
+
+        # Record the initial point and results in the object state
+        self.sol_x0 = x0
+        self.sol_x, self.sol_u, self.sol_lam = x, u, lam
+
         return x, u, lam
 
+
+    def V(self,x0):
+        """
+        Return the minimum cost of a trajectory starting from the point x0.
+        """
+        # print(f"V_mats.shape = {self.V_mats.shape}; v_vecs.shape = {self.v_vecs.shape}.")
+        mincost = 0.5 * x0.T @ self.V_mats[:,:,0] @ x0 + self.v_vecs[:,[0],0].T @ x0 + self.beta[0]
+        # print(f"mincost = {mincost}")
+        return( mincost[0,0] )
     #########################################################################################################
     ## OPTIMIZATION -- LAGRANGE MULTIPLIER APPROACH
     #########################################################################################################
@@ -767,9 +779,11 @@ class DiscreteLQR:
         return KKT
 
     #########################################################################################################
-    def KKTrhs(self, x0startpoint):
+    def KKTrhs(self, x0kkt):
         """
-        Construct RHS vector for KKT system from known elements.
+        Construct RHS vector for KKT system from known elements of system object.
+        This depends on the initial point of interest. Allow an arbitrary choice,
+        without prejudice to the "native" initial point for the system.
         """
         #        if finalT < 0:
         #            T = self.T
@@ -781,10 +795,10 @@ class DiscreteLQR:
         n = self.F_mats.shape[0]
         m = self.F_mats.shape[1] - n
 
-        x0 = x0startpoint
+        x0 = x0kkt
         if x0.shape != (n, 1):
             print("WARNING: Given initial point has shape {0}.".format(x0.shape))
-            x0 = x0startpoint.reshape(n, 1)
+            x0 = x0kkt.reshape(n, 1)
             print("         Using a local copy with shape {0}.".format(x0.shape))
 
         Kmtxsize = (2 * n + m) * T
@@ -796,7 +810,7 @@ class DiscreteLQR:
         # print("Shape of self.f(0) is {0}.".format(self.f(0).shape))
         # ppm.ppm(self.f(0),"f(0)")
 
-        C0_21 = self.C(0)[n:, :n]
+        C0_21 = self.C(0)[n:, :n]  # Wrinkle: This should be zero. See theory writeup.
         # print(" ")
         # ppm.ppm(C0_21,"C0_21")
         # ppm.ppm(self.c(0),"c(0)")
@@ -870,9 +884,9 @@ class DiscreteLQR:
         n = traj_x.shape[0]
         m = traj_u.shape[0]
         T = traj_u.shape[2]
-        # First pile x's atop u's and pad bottom with 0's:
+        # First pile interior x's atop u's and lambda's:
         midpart = np.vstack((traj_x[:, 0, 1:T], traj_u[:, 0, 1:T], traj_lam[:, 0, 1:T]))
-        # Next stack the columns on top of each other, working left to right
+        # Next stack those tall columns on top of each other, working left to right
         corecol = midpart.reshape(
             ((T - 1) * (m + n + n), 1), order="F"
         )  # What a minefield.
@@ -912,35 +926,22 @@ class DiscreteLQR:
     #########################################################################################################
     ## SENSITIVITY ANALYSIS -- GRADIENTS OF THE MINIMUM VALUE FUNCTION "V" w.r.t. DYNAMIC ELEMENTS
     #########################################################################################################
-    def sensitivity(self, x0):
-        T = self.Tmax
-        m = self.m
-        n = self.n
-
-        # Use the current sensitivity matrix if applicable, otherwise build a fresh one
-        dx0 = 6.02e23  # Avogadro's Number. Geeky joke: any enormous scalar will do.
-        if self.sol_x0 is not None:
-            dx0 = np.linalg.norm(x0 - self.sol_x0)
-        if dx0 < np.finfo(float).eps * 100:
-            return self.sens_mtx
+    def sensVsetup(self, x0):
+        # The sensitivity matrix for V is built from the
+        # solutions and multipliers in the nominal problem.
+        # Calculate those efficiently by backward-forward pass,
+        # repackage result into KKT format, and build the matrix.
+        # (Efficiency concern: actually forming that sparse
+        # rank-1 matrix wastes time and storage. Maybe fix later.)
 
         bestx, bestu, bestlam = self.bestxul(x0)
-        self.sol_x = bestx
-        self.sol_u = bestu
-        self.sol_lam = bestlam
+        kktsol = self.xul2kkt(bestx,bestu,bestlam)
+        return kktsol @ kktsol.T
 
-        bigcore = np.vstack((bestx[:, 0, 1:T], bestu[:, 0, 1:T], bestlam[:, 0, 1:T]))
-        corecol = bigcore.reshape(
-            ((T - 1) * (m + n + n), 1), order="F"
-        )  # What a minefield. Stack the cols.
-        fullsol = np.vstack(
-            (bestu[:, [0], 0], bestlam[:, [0], 0], corecol, bestx[:, [0], T])
-        )
-
-        self.sens_mtx = fullsol @ fullsol.T
-        self.sol_x0 = x0
-
-        return self.sens_mtx
+    #########################################################################################################
+    def gradx0V(self, x0):
+        grad = self.V_mats[:, :, 0] @ x0 + self.v_vecs[:, [0], 0]
+        return grad
 
     #########################################################################################################
     def gradctV(self, t, x0):
@@ -948,9 +949,7 @@ class DiscreteLQR:
         m = self.m
         n = self.n
 
-        S = self.sensitivity(
-            x0
-        )  # Set up or refresh the optimal trajectory we have remembered
+        _,_,_ = self.bestxul(x0)  # Refresh nominal solution and multipliers
 
         tlist = [t]
         if self.c_vecs.ndim == 2:
@@ -978,7 +977,7 @@ class DiscreteLQR:
         m = self.m
         n = self.n
 
-        S = self.sensitivity(x0)
+        S = self.sensVsetup(x0)
 
         tlist = [t]
         if self.C_mats.ndim == 2:
@@ -1025,7 +1024,7 @@ class DiscreteLQR:
         m = self.m
         n = self.n
 
-        S = self.sensitivity(x0)
+        S = self.sensVsetup(x0)
 
         tlist = [t]
         if self.F_mats.ndim == 2:
@@ -1061,9 +1060,7 @@ class DiscreteLQR:
         m = self.m
         n = self.n
 
-        S = self.sensitivity(
-            x0
-        )  # Set up or refresh the optimal trajectory we have remembered
+        _,_,_ = self.bestxul(x0)  # Refresh nominal solution and multipliers
 
         tlist = [t]
         if self.f_vecs.ndim == 2:
@@ -1077,16 +1074,12 @@ class DiscreteLQR:
 
         return grad
 
-    #########################################################################################################
-    def gradx0V(self, x0):
-        grad = self.V_mats[:, :, 0] @ x0 + self.v_vecs[:, [0], 0]
-        return grad
 
     #########################################################################################################
     ## SENSITIVITY ANALYSIS -- GRADIENTS OF GENERAL TRAJECTORY FUNCTION "W" w.r.t. DYNAMIC ELEMENTS
     #########################################################################################################
     #
-    def makeBOP(self, wx, wu, x0):
+    def sensWsetup(self, wx, wu, x0):
         if self.BOP is not None:
             tol = 100 * np.finfo(float).eps
             if (
@@ -1098,7 +1091,7 @@ class DiscreteLQR:
 
         # We need the nominal solution for the KKT system.
         # The backward/forward passes find that efficiently
-        _ = self.sensitivity(x0)  # Build or just recall the optimal trajectory
+        _ = self.sensVsetup(x0)  # Build or just recall the optimal trajectory
         KKTsol0 = self.xul2kkt(self.sol_x, self.sol_u, self.sol_lam)
 
         # The corresponding sensitivity system has the same coefficient matrix.
@@ -1106,7 +1099,7 @@ class DiscreteLQR:
         # Stack coeffs of wx and wu into the right slots of the RHS vector.
         sensrhs = self.xul2kkt(wx, wu, np.zeros(wx.shape))
         senssol = np.linalg.solve(KKT, sensrhs)
-        # ppm.ppm(senssol,"senssol, printed by function makeBOP,")
+        # ppm.ppm(senssol,"senssol, printed by function sensWsetup,")
 
         # Calculate the Big Olde Product and make it part of the system object
         self.BOP = -senssol @ KKTsol0.T
@@ -1123,7 +1116,7 @@ class DiscreteLQR:
         m = self.m
         n = self.n
 
-        BOP = self.makeBOP(wx, wu, x0)
+        BOP = self.sensWsetup(wx, wu, x0)
         senslam0 = self.senssol[m : m + n, [0]]
         wx0 = wx[:, [0], 0]
         mtxA0 = self.F(0)[:, 0:n]
@@ -1137,7 +1130,7 @@ class DiscreteLQR:
         m = self.m
         n = self.n
 
-        BOP = self.makeBOP(wx, wu, x0)
+        BOP = self.sensWsetup(wx, wu, x0)
 
         tlist = [t]
         if self.C_mats.ndim == 2:
@@ -1179,7 +1172,7 @@ class DiscreteLQR:
         m = self.m
         n = self.n
 
-        BOP = self.makeBOP(wx, wu, x0)
+        BOP = self.sensWsetup(wx, wu, x0)
         ppm.ppm(self.senssol, f"senssol, printed in gradctW,")
 
         tlist = [t]
@@ -1207,7 +1200,7 @@ class DiscreteLQR:
         m = self.m
         n = self.n
 
-        BOP = self.makeBOP(wx, wu, x0)
+        BOP = self.sensWsetup(wx, wu, x0)
 
         tlist = [t]
         if self.F_mats.ndim == 2:
@@ -1240,7 +1233,7 @@ class DiscreteLQR:
         m = self.m
         n = self.n
 
-        BOP = self.makeBOP(wx, wu, x0)
+        BOP = self.sensWsetup(wx, wu, x0)
 
         # ppm.ppm(self.senssol,f"senssol, printed in gradftW,")
 
