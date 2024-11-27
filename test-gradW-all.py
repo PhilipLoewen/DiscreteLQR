@@ -141,6 +141,8 @@ if False:
     wu = -wu
     # TODO - intervention ends here
 
+wx[:,[0],0] = np.zeros((n,1))
+
 ppm.ppm(wx, "wx, giving coefficients for x,")
 ppm.ppm(wu, "wu, giving coefficients for u,")
 

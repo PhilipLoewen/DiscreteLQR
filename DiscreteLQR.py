@@ -639,12 +639,17 @@ class DiscreteLQR:
         Find optimal state and control sequences and multipliers,
         given initial state.
 
-        :param x0:  (n,1) array. The initial state.
+        :param x0:  np.array of shape (n,1). The initial state.
         :return:    tuple (x,u,lam), where ...
-                           x is an array of shape (n,1,T+1),
-                           u is an array of shape (m,1,T),
-                           lam is an array of shape (n,1,T).
+                        x is an array of shape (n,1,T+1),
+                        u is an array of shape (m,1,T),
+                        lam is an array of shape (n,1,T).
         (Can't use lambda for a variable name, because it's a Python keyword.)
+
+        Big idea: The 2-pass method that solves the nominal problem *also*
+        solves a certain KKT system that is relevant for sensitivity analysis.
+        So implement it carefully in order to get a KKT-solver for free.
+        All the hard work is in the function named KKTsol.
         """
 
         # Skip all the work below if the results are already on file:
@@ -657,46 +662,38 @@ class DiscreteLQR:
             and self.sol_lam is not None:
                 return self.sol_x, self.sol_u, self.sol_lam
 
-        m = self.m
-        n = self.n
-        T = self.T
+        m, n, T = self.m, self.n, self.T
 
-        x = np.zeros((n, 1, T + 1))
-        u = np.zeros((m, 1, T))
-        lam = np.zeros((n, 1, T))
+        # Linear terms in the cost and drift terms in the dynamics
+        # turn into RHS ingredients for the KKT system. Position them.
+        # (When x0=0, this inverts early steps in the function KKTsol.)
+        N = T*(2*n+m)
+        RHS = np.zeros((N,1))
 
-        x[:, [0], 0] = x0
         for t in range(T):
-            #            x_t = x[:, 0, t].reshape(n, 1)
-            x_t = x[:, [0], t]  # 2024-06-30
-            u_t = self.K_mats[:, :, t] @ x[:, 0, t].reshape(n, 1) + self.k_vecs[
-                :, 0, t
-            ].reshape(m, 1)
-            u[:, 0, [t]] = u_t
-            z_t = np.vstack((x_t, u_t))
-            x[:, 0, [t + 1]] = self.F(t) @ z_t + self.f(t)
+            i0 = m + t*(m+2*n)
+            RHS[i0:i0+n,[0]] = -self.f(t)
 
-        x_T = x[:, 0, T].reshape(n, 1)
-        u_T = np.zeros((m, 1))
-        z_T = np.vstack((x_T, u_T))
+        # The second block of the KKT RHS involves x0, in general:
+        RHS[m:m+n] -= self.F(0)[:n,:n]@x0
 
-        lam[:, [0], T - 1] = self.C(T)[0:n, 0:n] @ x[:, [0], T] + self.c(T)[0:n, [0]]
+        RHS[:m,[0]] = -self.c(0)[n:,[0]]
+        for t in range(1,T):
+            j0 = m + n + (t-1)*(m+2*n)
+            RHS[j0:j0+m+n,[0]] = -self.c(t)
+        j0 = T*(m+2*n) - n
+        RHS[j0:] = -self.c(T)[:n,[0]]
 
-        for s in range(T - 1):
-            t = T - 1 - s
-            lam[:, 0, [t - 1]] = (
-                self.F(t)[0:n, 0:n].T @ lam[:, 0, [t]]
-                + self.C(t)[0:n, 0:n] @ x[:, 0, [t]]
-                + self.C(t)[0:n, n : n + m] @ u[:, 0, [t]]
-                + self.c(t)[0:n, [0]]
-            )
+        # Go off and do the backward-forward passes,
+        # then extract trajectory info from tall solution vector.
+        w = self.KKTsol(RHS)
+        x, u, lam = self.kkt2xul(x0,w)
 
         # Record the initial point and results in the object state
         self.sol_x0 = x0
         self.sol_x, self.sol_u, self.sol_lam = x, u, lam
 
         return x, u, lam
-
 
     def V(self,x0):
         """
@@ -945,6 +942,153 @@ class DiscreteLQR:
 
         return RHS
 
+    #########################################################################################################
+    def KKTsol(self,rhs):
+        """
+        Solve for w in the matrix-vector system
+           KKT @ w = rhs
+        Input rhs must be a 2D array of shape (N,1),
+        where N = (2n+m)T is the number of cols
+        in matrix KKT.
+
+        This is a hand-crafted response to the
+        special sparse structure of the KKT matrix,
+        built using the 2-pass approach detailed in
+        the theoretical writeup.
+
+        To read the code, note that it's essentially the same as
+        solving for the optimal trajectory and dual values in
+        the special case where the initial state is 0.
+        """
+        # Note dimensions and reserve space for result vector w
+        m, n, T = self.m, self.n, self.T
+        result = np.zeros(((2*n+m)*T,1))
+
+        # Introduce name-changes and sign conventions from the theoretical writeup    
+        f = np.zeros((n,1,T))
+        for t in range(T):
+            i0 = m + t*(m+2*n)
+            # print(f"Copying rhs python indices {i0}:{i0+n} into -f_{t}.")
+            f[:,[0],t] = -rhs[i0:i0+n,[0]]
+
+        c = np.zeros((m+n,1,T+1))
+        c[n:,[0],0] = -rhs[:m,[0]]
+        for t in range(1,T):
+            j0 = m + n + (t-1)*(m+2*n)
+            # print(f"Copying rhs python indices {j0}:{j0+m+n} into -c_{t}.")
+            c[:,[0],t] = -rhs[j0:j0+m+n,[0]]
+        j0 = T*(m+2*n) - n
+        c[:n,[0],T] = -rhs[j0:]
+
+        if False:
+            # Echo the matrices just built to check them.
+            ppm.ppm(c[:,0,:],"c")
+            ppm.ppm(f[:,0,:],"f")
+
+        # Allocate storage for auxiliary elements refreshed in the forward pass
+        q_vecs = np.zeros((m+n, 1, T))
+        k_vecs = np.zeros((m, 1, T))
+        v_vecs = np.zeros((n, 1, T + 1))
+
+        # Set up for backward pass, using suitable final value for v
+        v = c[:n,[0],T]
+        v_vecs[:,[0],T] = v
+
+        # Run the backward pass
+        for t in reversed(range(T)):
+            # Remember the collection of matrices intrinsic to the system.
+            # Avoiding recomputation brings some welcome efficiency.
+            C = self.C(t)
+            F = self.F(t)
+            V = self.V_mats[:, :, t + 1]
+            Q = self.Q_mats[:,:,t]
+            K = self.K_mats[:,:,t]
+
+            # Run the backward iteration for the vector-parts only
+            v = v_vecs[:, [0], t+1]
+            q = c[:,[0],t] + F.T @ V @ f[:,[0],t] + F.T @ v
+
+            if False:
+                print(f"\nUsing t={t} in accelerated backward pass.")
+                print(f"Build q_{t} from v_{t+1} and c_{t}, where ...")
+                ppm.ppm(v,f"v_{t+1}")
+                ppm.ppm(c[:,[0],t],f"c_{t}")
+                ppm.ppm(q,f"q_{t}")
+
+            Q_xu = Q[: n, n :]
+            Q_uu = Q[n :, n :]
+            q_x = q[: n].reshape(n, 1)
+            q_u = q[n :].reshape(m, 1)
+            k = -np.linalg.solve(Q_uu, q_u)
+            v = q_x + Q_xu @ k
+
+            if False:
+                # Print for debugging. May need fixing.
+                print(f"\nReport from stage t={t}:")
+                ppm.ppm(k,f"k_{t}")
+                ppm.ppm(v,f"v_{t}")
+                ppm.ppm(c[:,[0],t],f"c_{t}")
+                ppm.ppm(f[:,[0],t],f"f_{t}")
+                ppm.ppm(V,f"V({t+1})")
+                ppm.ppm(v_vecs[:, [0], t + 1],f"v({t+1})")
+                ppm.ppm(Q,f"Q({t})")
+                ppm.ppm(q,f"q({t})")
+
+            q_vecs[:, 0, [t]] = q
+            k_vecs[:, 0, [t]] = k
+            v_vecs[:, 0, [t]] = v
+
+        
+        if False:
+            print(" ")
+            ppm.ppm(q_vecs[:,0,:],"q_vecs from KKTsol",sigfigs=5)
+            print(" ")
+            ppm.ppm(k_vecs[:,0,:],"k_vecs from KKTsol",sigfigs=5)
+            print(" ")
+            ppm.ppm(v_vecs[:,0,:],"v_vecs from KKTsol",sigfigs=5)
+            print(" ")
+
+        # Run the forward pass just as in the nominal case,
+        # but use the adjusted vector elements just found.
+        # The variable names here match the ones in the writeup
+        # for the nominal forward pass, with initial point x0=0.
+        x = np.zeros((n, 1, T + 1))
+        u = np.zeros((m, 1, T))
+        lam = np.zeros((n, 1, T))
+
+        x[:, [0], 0] = np.zeros((n,1))  # Initial point
+        for t in range(T):
+            x_t = x[:, [0], t]   # Current state is known. Simplify notation.
+            u_t = self.K_mats[:, :, t] @ x_t + k_vecs[:,[0],t]
+            z_t = np.vstack((x_t, u_t))
+
+            u[:, 0, [t]] = u_t
+            x[:, 0, [t + 1]] = self.F(t) @ z_t + f[:,[0],t]
+            
+        x_T = x[:, [0], T]
+        u_T = np.zeros((m, 1))
+        z_T = np.vstack((x_T, u_T))
+
+        # Iterate to recover solutions in the lambda slot.
+        lam[:, [0], T - 1] = self.C(T)[0:n, 0:n] @ x_T + c[:n, [0], [T]]
+
+        for s in range(T - 1):
+            t = T - 1 - s
+            lam[:, 0, [t - 1]] = (
+                self.F(t)[0:n, 0:n].T @ lam[:, 0, [t]]
+                + self.C(t)[0:n, 0:n] @ x[:, 0, [t]]
+                + self.C(t)[0:n, n : n + m] @ u[:, 0, [t]]
+                + c[:n, [0], [t]]
+            )
+
+        if False:
+            print(f"\nSensitivity findings based on backward-forward passes:\n")
+            ppm.ppm(x[:,0,:],"now in slots corresponding to state sequence x_t (by cols)",sigfigs=5)
+            ppm.ppm(u[:,0,:],"now in slots corresponding to control sequence u_t (by cols)",sigfigs=5)
+            ppm.ppm(lam[:,0,:],"now in slots corresponding to multiplier sequence lambda_t (by cols)",sigfigs=5)
+
+        w = self.xul2kkt(x,u,lam)  # Convert solution to KKT format
+        return w
 
     #########################################################################################################
     ## INTERFACE BETWEEN 2-PASS APPROACH AND KKT METHOD ... CONVERT SOLUTION REPRESENTATIONS
@@ -1169,11 +1313,11 @@ class DiscreteLQR:
     #########################################################################################################
     ## SENSITIVITY ANALYSIS -- GRADIENTS OF GENERAL TRAJECTORY FUNCTION "W" w.r.t. DYNAMIC ELEMENTS
     #########################################################################################################
-    # There is a confusing minus sign on the right in the KKT writeup, that we must consider here.
-
-    def sensWsetup(self, wx, wu, x0):    # OLD BUT WORKING
-        # Build and record the column-vector of sensitivity elements.
-        # Return the sparse rank-1 product matrix it helps to define.
+    def sensWsetup(self, wx, wu, x0):
+        """
+        Build and record the column-vector of sensitivity elements.
+        Return the sparse rank-1 product matrix it helps to define.
+        """
 
         if self.BOP is not None:
             tol = 100 * np.finfo(float).eps
@@ -1190,11 +1334,10 @@ class DiscreteLQR:
         KKTsol0 = self.xul2kkt(self.sol_x, self.sol_u, self.sol_lam)
 
         # The corresponding sensitivity system has the same coefficient matrix.
-        KKT = self.KKTmtx()
-        # Stack coeffs of wx and wu into the right slots of the RHS vector.
-        # There is a sign-change issue to fret over
-        sensrhs = -self.xul2kkt(wx, wu, np.zeros(wx.shape))
-        sensWcol = np.linalg.solve(KKT, sensrhs)
+        # Stack the coeffs in wx and wu into the correct slots of the RHS vector.
+        sensrhs = self.xul2kkt(wx, wu, np.zeros(wx.shape))
+        # sensWcol = np.linalg.solve(KKT, sensrhs)  # This is the slow bulletproof method
+        sensWcol = self.KKTsol(sensrhs) # This is the efficient 2-pass method
         # ppm.ppm(sensWcol,"sensWcol, printed by function sensWsetup,")
 
         # Calculate the Big Olde Product and make it part of the system object
@@ -1202,176 +1345,6 @@ class DiscreteLQR:
         self.coeff_wx = wx
         self.coeff_wu = wu
         self.sensWcol = sensWcol
-
-        return self.BOP
-
-    def sensWsetup(self, wx, wu, x0):   # NEW ... AND IMPROVED?
-        # Build and record the column-vector of sensitivity elements.
-        # Return the sparse rank-1 product matrix it helps to define.
-
-        if self.BOP is not None:
-            tol = 100 * np.finfo(float).eps
-            if (
-                np.linalg.norm(wx - self.coeff_wx) < tol
-                and np.linalg.norm(wu - self.coeff_wu) < tol
-                and np.linalg.norm(x0 - self.sol_x0) < tol
-            ):
-                return self.BOP
-
-        if True:  # Explain why we are going to do all that follows.
-            print("\n\n***** LAUNCHING sensWsetup. Possible reasons follow. *****")
-            print("  self.BOP is None.") if self.BOP is None else 0
-            print("  self.coeff_wx is None.") if self.coeff_wx is None \
-                else print(f"  wx difference is {np.linalg.norm(wx - self.coeff_wx)}")
-            print("  self.coeff_wu is None.") if self.coeff_wu is None \
-                else print(f"  wu difference is {np.linalg.norm(wu - self.coeff_wu)}")
-            print("  self.sol_x0 is None.") if self.sol_x0 is None \
-                else print(f"  x0 difference is {np.linalg.norm(x0 - self.sol_x0)}")
-            print()
-
-        # We need the matrices built in the backward pass that solved
-        # the nominal system. The next call makes sure these are in place:
-        _,_,_ = self.bestxul(x0)  # Build or just recall the optimal trajectory
-
-        # Use pointers to the memo-ized elements of the nominal solution
-        m, n, T = self.m, self.n, self.T
-#        V_mats = self.V_mats
-#        K_mats = self.K_mats
-#        Q_mats = self.Q_mats
-
-        # Allocate storage for elements of the new solution
-
-        q_vecs = np.zeros((m+n, 1, T))
-        k_vecs = np.zeros((m, 1, T))
-        v_vecs = np.zeros((n, 1, T + 1))
-
-        # Set up for backward pass, using suitable gradient element
-        v = -wx[:,[0],T]
-        v_vecs[:,[0],T] = v
-
-        # Run the backward pass, re-using matrices found in nominal case
-        for t in reversed(range(T)):
-            # gradients replace the RHS elements c, f in the nominal setup:
-            c = -np.vstack(( wx[:,[0],t], wu[:,[0],t] ))
-            f = np.zeros((n,1))
-
-            # Remember the collection of matrices intrinsic to the system
-            C = self.C(t)
-            F = self.F(t)
-            V = self.V_mats[:, :, t + 1]
-            Q = self.Q_mats[:,:,t]
-            K = self.K_mats[:,:,t]
-
-            # Run the backward iteration for the vector-parts only
-            v = v_vecs[:, [0], t+1]
-            q = c + F.T @ V @ f + F.T @ v
-
-            if False:
-                print(f"\nStep {t} of accelerated backward iteration.")
-                print(f"Build q_{t} from v_{t+1} and c_{t}, where ...")
-                ppm.ppm(v,f"v_{t+1}")
-                ppm.ppm(c,f"c_{t}")
-                ppm.ppm(q,f"q_{t}")
-
-#                ppm.ppm(self.c(t),f"c({t}) from nominal system")
-#                ppm.ppm(self.q_vecs[:,0,t],f"q({t}) from nominal system")
-
-            Q_xu = Q[: n, n :]
-            Q_uu = Q[n :, n :]
-            q_x = q[: n].reshape(n, 1)
-            q_u = q[n :].reshape(m, 1)
-            k = -np.linalg.solve(Q_uu, q_u) #.reshape(m, 1)
-            v = q_x + Q_xu @ k
-
-
-            if False:
-                # Print for debugging.
-                print(f"Continue, using k_{t} to generate v_{t}, as follows.")
-                ppm.ppm(k,f"k_{t}")
-                ppm.ppm(v,f"v_{t}")
-                print(f"\nReport from stage t={t}:")
-                ppm.ppm(self.C(t),f"C({t})")
-                ppm.ppm(self.F(t),f"F({t})")
-                ppm.ppm(c,f"c({t})")
-                ppm.ppm(f,f"f({t})")
-                ppm.ppm(self.V_mats[:, :, t + 1],f"V({t+1})")
-                ppm.ppm(v_vecs[:, [0], t + 1],f"v({t+1})")
-                ppm.ppm(Q,f"Q({t})")
-                ppm.ppm(q,f"q({t})")
-
-            q_vecs[:, 0, [t]] = q
-            k_vecs[:, 0, [t]] = k
-            v_vecs[:, 0, [t]] = v
-
-        ppm.ppm(q_vecs,"q_vecs from external scheme",sigfigs=5)
-        print
-        ppm.ppm(k_vecs,"k_vecs from external scheme",sigfigs=5)
-        print
-        ppm.ppm(v_vecs,"v_vecs from external scheme",sigfigs=5)
-
-        # Run the forward pass just as in the nominal case,
-        # but use the adjusted vector elements just found.
-        # The variable names here are very misleading!
-        x = np.zeros((n, 1, T + 1))
-        u = np.zeros((m, 1, T))
-        lam = np.zeros((n, 1, T))
-
-        x[:, [0], 0] = -wx[:,[0],0]  # Initial point
-        for t in range(T):
-            x_t = x[:, [0], t]   # Current state is known. Simplify notation.
-            u_t = self.K_mats[:, :, t] @ x_t + k_vecs[:,[0],t]
-            z_t = np.vstack((x_t, u_t))
-
-            u[:, 0, [t]] = u_t
-            # x[:, 0, [t + 1]] = self.F(t) @ z_t + self.f(t)  # Original forward pass
-            x[:, 0, [t + 1]] = self.F(t) @ z_t # In sensitivity pass, RHS slot for f holds 0
-            
-        x_T = x[:, [0], T]
-        u_T = np.zeros((m, 1))
-        z_T = np.vstack((x_T, u_T))
-        #ppm.ppm(x_T,f"x_{T}")
-
-        # Iterate to recover solutions in the lambda slot.
-        # Remember: nominal ingredient c_x gets replaced with wx.
-        lam[:, [0], T - 1] = self.C(T)[0:n, 0:n] @ x_T - wx[:, [0], [T]]
-
-        for s in range(T - 1):
-            t = T - 1 - s
-            lam[:, 0, [t - 1]] = (
-                self.F(t)[0:n, 0:n].T @ lam[:, 0, [t]]
-                + self.C(t)[0:n, 0:n] @ x[:, 0, [t]]
-                + self.C(t)[0:n, n : n + m] @ u[:, 0, [t]]
-                - wx[:, [0], [t]]
-            )
-
-        print(f"\nSensitivity findings based on backward-forward passes:\n")
-        ppm.ppm(x[:,0,:],"now in slots corresponding to state sequence x_t (by cols)",sigfigs=5)
-        ppm.ppm(u[:,0,:],"now in slots corresponding to control sequence u_t (by cols)",sigfigs=5)
-        ppm.ppm(lam[:,0,:],"now in slots corresponding to  multiplier sequence lambda_t (by cols)",sigfigs=5)
-
-        sensWcol = self.xul2kkt(x,u,lam)  # Ingredients available. Put in KKT format.
-
-        # Recall the nominal solution. Put that into KKT format:
-        KKTsol0 = self.xul2kkt(self.sol_x, self.sol_u, self.sol_lam)
-
-        # Calculate the Big Olde Product. Remember it, and the coefficients.
-        self.BOP = -sensWcol @ KKTsol0.T
-
-        self.coeff_wx = wx
-        self.coeff_wu = wu
-        self.sensWcol = sensWcol
-
-        if True:
-            # Test by solving KKT directly. This is expensive!
-            print()
-            KKT = self.KKTmtx()
-            KKTsensrhs = -self.xul2kkt(wx, wu, np.zeros(wx.shape))
-            KKTsensWcol = np.linalg.solve(KKT, KKTsensrhs)
-            delta = np.linalg.norm(KKTsensWcol-sensWcol)
-            print(f"In sensWsetup, two-pass method misses by {delta:6.1e}.")
-            if delta > 1.E-7:
-                sidebyside = np.hstack((sensWcol,KKTsensWcol))
-                ppm.ppm(sidebyside,"showing both choices, 2-pass | linalg,")
 
         return self.BOP
 

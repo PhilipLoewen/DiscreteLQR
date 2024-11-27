@@ -78,6 +78,9 @@ C0 = np.block(
 wx = np.random.rand(n, 1, T + 1) * 10
 wu = np.random.rand(m, 1, T) * 10
 
+wx[:,[0],0] = np.zeros((n,1))
+
+
 ppm.ppm(wx, "wx, giving coefficients for x,")
 ppm.ppm(wu, "wu, giving coefficients for u,")
 
