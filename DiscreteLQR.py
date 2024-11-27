@@ -183,6 +183,7 @@ class DiscreteLQR:
     for debugging in the future.
 
     Philip D Loewen,
+    ... 2024-11-26: Restructure for conceptual structure and clarity
     ... 2024-11-23: Remember more internal elements from the backward pass in __init__
     ... 2024-07-16: Get V(x0) from the initial setup, no trajectory needed!
     ... 2024-07-04: Improve sensitivity functions for the autonomous case
@@ -333,11 +334,11 @@ class DiscreteLQR:
         self.sol_u = None
         self.sol_lam = None
 
-        # Reserve space for the Big Olde Product matrix used for general sensitivity calculations.
+        # Reserve space for the ingredients for general sensitivity calculations.
+        self.coeff_wx = None
+        self.coeff_wu = None
+        self.sensWcol = None
         self.BOP = None
-        self.BOPwx = None
-        self.BOPwu = None
-        self.senssol = None
 
         # Run the backward pass detailed in the theoretical writeup.
         # Critical ingredients of the system description that this produces are ...
@@ -700,17 +701,18 @@ class DiscreteLQR:
     def V(self,x0):
         """
         Return the minimum cost of a trajectory starting from the point x0.
+        Note: This can be found without working out details of the optimal trajectory!
         """
-        # print(f"V_mats.shape = {self.V_mats.shape}; v_vecs.shape = {self.v_vecs.shape}.")
         mincost = 0.5 * x0.T @ self.V_mats[:,:,0] @ x0 + self.v_vecs[:,[0],0].T @ x0 + self.beta[0]
-        # print(f"mincost = {mincost}")
         return( mincost[0,0] )
+
     #########################################################################################################
     ## OPTIMIZATION -- LAGRANGE MULTIPLIER APPROACH
     #########################################################################################################
     def KKTmtx(self):
         """
-        Construct the massive block-matrix K from known elements.
+        Construct and return the massive block-matrix K from known elements. 
+        Also save it as part of the system object.
         """
         T = self.Tmax
         m = self.m
@@ -779,11 +781,84 @@ class DiscreteLQR:
         return KKT
 
     #########################################################################################################
+    def KKTmul(self,w):
+        """
+        Form the matrix-vector product KKT @ w.
+        Input w must be a 2D array of shape (N,1),
+        where N = (2n+m)T is the number of cols
+        in matrix KKT.
+
+        This is a hand-crafted response to the
+        special sparse structure of the KKT matrix,
+        because literally calculating "KKT @ w"
+        seems wasteful.
+    
+        Notation in the code mirrors what's in
+        the theoretical writeup.
+        """
+        # Note dimensions and reserve space for result
+        m, n, T = self.m, self.n, self.T
+        result = np.zeros(((2*n+m)*T,1))
+    
+        if T<2:
+            # Degenerate situation. Efficiency not a big deal.
+            KKT = self.KKTmtx()
+            return KKT @ w
+    
+        # Reformat the given input vector w to get names
+        # we recognize from the theoretical writeup.
+        # Need a fake initial point; this gets ignored.
+        x0 = np.zeros((n,1))
+        x, u, lam = self.kkt2xul(x0,w)
+    
+        # Elements in top 2 rows of KKT
+        C0_xx = self.C(0)[n:, n:]
+        B0    = self.F(0)[:, n:]
+    
+        # Top 2 cols of w
+        u0 = u[:,[0],0]
+        lam0 = lam[:,[0],0]
+    
+        # Top row of result
+        result[:m,[0]] = C0_xx @ u0 + B0.T @ lam0
+    
+        # Second row of result
+        x1    = x[:,[0],1]
+        result[m:m+n] = B0 @ u0 - x1
+    
+        for t in range(1,T):
+            # Generate two output blocks
+            xt = x[:,[0],t]
+            ut = u[:,[0],t]
+            zt = np.vstack((xt,ut))
+            At = self.F(t)[:,:n]
+            Bt = self.F(t)[:,n:n+m]
+            PTlamprev = np.vstack((lam[:n,[0],t-1],np.zeros((m,1))))
+    
+            i0 = m + n + (t-1)*(m + 2*n)   # index we are building
+            # print(f"Populating result[{i0}:{i0+m+n}].")
+            result[i0:i0+m+n,[0]] \
+                = -PTlamprev + self.C(t)@zt + self.F(t).T @ lam[:,[0],t]
+    
+            j0 = i0 + m + n                # index we are building
+            # print(f"Populating result[{j0}:{j0+n}].")
+            result[j0:j0+n,[0]] = At@xt + Bt@ut - x[:,[0],t+1]
+    
+        # Bottom row is a little bit special. Adjust loop pattern above
+        t = T
+        i0 = m + n + (t-1)*(m + 2*n)      # index we are building
+        # print(f"Populating result[{i0}:{i0+n}].")
+        result[i0:i0+m+n,[0]] \
+                = -lam[:,[0],t-1] + self.C(t)[:n,:n]@x[:,[0],t]
+    
+        return result
+
+
+    #########################################################################################################
     def KKTrhs(self, x0kkt):
         """
-        Construct RHS vector for KKT system from known elements of system object.
-        This depends on the initial point of interest. Allow an arbitrary choice,
-        without prejudice to the "native" initial point for the system.
+        Construct RHS vector for KKT system from known elements of the system object.
+        This depends on the initial point of interest. Allow an arbitrary choice for this.
         """
         #        if finalT < 0:
         #            T = self.T
@@ -797,17 +872,17 @@ class DiscreteLQR:
 
         x0 = x0kkt
         if x0.shape != (n, 1):
-            print("WARNING: Given initial point has shape {0}.".format(x0.shape))
+            print(f"WARNING from KKTrhs: Given initial point has shape {x0.shape}.")
             x0 = x0kkt.reshape(n, 1)
-            print("         Using a local copy with shape {0}.".format(x0.shape))
+            print(f"        Using a local copy with shape {x0.shape}.")
 
         Kmtxsize = (2 * n + m) * T
-        # print("We have n={:d} and m={:d}, with T={:d},".format(n,m,T))
-        # print("so the RHS vector will have shape {:d}x1.".format(Kmtxsize))
+        # print(f"We have n={n:d} and m={m:d}, with T={T:d},")
+        # print(f"so the RHS vector will have shape {Kmtxsize:d}x1.")
 
         # ppm.ppm(x0,"x0 (initial point)")
 
-        # print("Shape of self.f(0) is {0}.".format(self.f(0).shape))
+        # print(f"Shape of self.f(0) is {self.f(0).shape}.")
         # ppm.ppm(self.f(0),"f(0)")
 
         C0_21 = self.C(0)[n:, :n]  # Wrinkle: This should be zero. See theory writeup.
@@ -820,12 +895,12 @@ class DiscreteLQR:
         # ppm.ppm(C021x0,"C0_21 @ x0")
 
         RHS = -self.c(0)[n:, :] - C0_21 @ x0
-        # print("Computed top block of RHS has native shape {0}.".format(RHS.shape))
+        # print(f"Computed top block of RHS has native shape {RHS.shape}.")
         # RHS = RHS.reshape(m,1)
 
         A0 = self.F(0)[:n, :n]
         # A0x0= A0 @ x0
-        # print("Native shape of A0 @ x0 is {0}.".format(A0x0.shape))
+        # print("Native shape of A0 @ x0 is {A0x0.shape}.")
 
         b2 = -self.f(0) - A0 @ x0
         #        b2  = -self.f(0) - A0x0.reshape(n,1)
@@ -847,9 +922,9 @@ class DiscreteLQR:
         # print(" ")
 
         for t in range(1, T):
-            # print("Entering loop with t={0}, RHS.shape = {1},".format(t,RHS.shape))
-            # print("c({0}).shape = {1}".format(t,self.c(t).shape))
-            # print("f({0}).shape = {1}".format(t,self.f(t).shape))
+            # print(f"Entering loop with t={t}, RHS.shape = {RHS.shape},")
+            # print(f"c({t}).shape = {self.c(t).shape}")
+            # print(f"f({t}).shape = {self.f(t).shape}")
             # ppm.ppm(self.c(t),"c({:d})".format(t))
             # ppm.ppm(self.f(t),"f({:d})".format(t))
 
@@ -858,8 +933,8 @@ class DiscreteLQR:
                              [-self.f(t)]  ])  # fmt: skip
 
         t = T
-        # print("Final time t={0}, RHS.shape = {1},".format(t,RHS.shape))
-        # print("c({0}).shape = {1}".format(t,self.c(t).shape))
+        # print(f"Final time t={t}, RHS.shape = {RHS.shape},")
+        # print("c({t}).shape = {self.c(t).shape}")
         # ppm.ppm(self.c(t),"c({:d})".format(t))
 
         RHS = np.block([ [RHS],
@@ -872,7 +947,7 @@ class DiscreteLQR:
 
 
     #########################################################################################################
-    ## INTERFACE BETWEEN DIRECT APPROACH AND KKT METHOD ... CONVERT SOLUTION REPRESENTATIONS
+    ## INTERFACE BETWEEN 2-PASS APPROACH AND KKT METHOD ... CONVERT SOLUTION REPRESENTATIONS
     #########################################################################################################
 
     def xul2kkt(self, traj_x, traj_u, traj_lam):
@@ -907,9 +982,10 @@ class DiscreteLQR:
             inferred from x0 and KKTsol only, so we look them up in the
             known characteristics of the system object.
         """
-        n = self.n
-        m = self.m
-        T = self.T
+
+        n, m, T = self.n, self.m, self.T
+
+        # Set up containers for the desired results:
         KKTx = np.zeros((n, 1, T + 1))
         KKTu = np.zeros((m, 1, T))
         KKTl = np.zeros((n, 1, T))
@@ -929,14 +1005,20 @@ class DiscreteLQR:
     def sensVsetup(self, x0):
         # The sensitivity matrix for V is built from the
         # solutions and multipliers in the nominal problem.
-        # Calculate those efficiently by backward-forward pass,
-        # repackage result into KKT format, and build the matrix.
-        # (Efficiency concern: actually forming that sparse
-        # rank-1 matrix wastes time and storage. Maybe fix later.)
+        # So first make sure those elements are available.
 
         bestx, bestu, bestlam = self.bestxul(x0)
-        kktsol = self.xul2kkt(bestx,bestu,bestlam)
-        return kktsol @ kktsol.T
+
+        # Now in principle the sensitivity matrix could be
+        # defined as follows:
+        #   kktsol = self.xul2kkt(bestx,bestu,bestlam)
+        #   S = kktsol @ kktsol.T
+        # But literally calculating and storing S is wasteful.
+        # Instead we decide which sub-blocks of S we need 
+        # on the fly, and build them when needed by 
+        # forming tailored small-scale outer products.
+
+        return None
 
     #########################################################################################################
     def gradx0V(self, x0):
@@ -973,11 +1055,11 @@ class DiscreteLQR:
 
     #########################################################################################################
     def gradCtV(self, t, x0):
-        T = self.Tmax
-        m = self.m
-        n = self.n
+        T, m, n = self.Tmax, self.m, self.n
 
-        S = self.sensVsetup(x0)
+        # Make sure the nominal trajectory and multipliers are ready, then fetch them.
+        _ = self.sensVsetup(x0)  
+        kktsol = self.xul2kkt(self.sol_x,self.sol_u,self.sol_lam)
 
         tlist = [t]
         if self.C_mats.ndim == 2:
@@ -990,7 +1072,7 @@ class DiscreteLQR:
             if 0 < t and t < T:
                 i0 = m + n + (t - 1) * (m + 2 * n)
                 j0 = i0
-                Sblock = S[i0 : i0 + m + n, j0 : j0 + m + n]
+                Sblock = kktsol[i0:i0+m+n,[0]] @ (kktsol[j0:j0+m+n,[0]].T)
                 # if printlevel > 1:
                 #    ppm.ppm(Sblock,f"Sblock_{t} starts at ({i0},{j0}),")
                 grad += Sblock / 2.0
@@ -998,7 +1080,11 @@ class DiscreteLQR:
             if t == 0:
                 # if printlevel > 1:
                 #    print(f"For t={t}, focus on R_{t}.")
-                Sblock = S[0:m, 0:m]
+                Sblock = kktsol[0:m,[0]] @ (kktsol[0:m,[0]].T)
+                # print(f"Diagnostic from gradCtV with t={t}:")
+                # print(f"Shape of first factor defining Sblock is {kktsol[0:m,[0]].shape}.")
+                # print(f"Shape of Sblock is {Sblock.shape}.")
+                # ppm.ppm(Sblock,"Sblock")
                 dVdC = np.block(
                     [[np.zeros((n, n)), np.zeros((n, m))], [np.zeros((m, n)), Sblock]]
                 )
@@ -1007,10 +1093,12 @@ class DiscreteLQR:
             if t == T:
                 # if printlevel > 1:
                 #    print(f"For t={t}, focus on Q_{t}.")
-                Sblock = S[
-                    (2 * n + m) * T - n :,
-                    (2 * n + m) * T - n :,
-                ]
+                Sblock = kktsol[(2*n+m)*T-n:,[0]] @ (kktsol[(2*n+m)*T-n:,[0]].T)
+
+                # print(f"Diagnostic from gradCtV with t={t}:")
+                # print(f"Shape of Sblock is {Sblock.shape}.")
+                # ppm.ppm(Sblock,"Sblock")
+
                 dVdC = np.block(
                     [[Sblock, np.zeros((n, m))], [np.zeros((m, n)), np.zeros((m, m))]]
                 )
@@ -1020,11 +1108,10 @@ class DiscreteLQR:
 
     #########################################################################################################
     def gradFtV(self, t, x0):
-        T = self.Tmax
-        m = self.m
-        n = self.n
+        T, m, n = self.Tmax, self.m, self.n
 
-        S = self.sensVsetup(x0)
+        _ = self.sensVsetup(x0)
+        kktsol = self.xul2kkt(self.sol_x,self.sol_u,self.sol_lam)
 
         tlist = [t]
         if self.F_mats.ndim == 2:
@@ -1037,8 +1124,10 @@ class DiscreteLQR:
             if 0 < t and t < T:
                 i0 = 2 * m + 2 * n + (t - 1) * (m + 2 * n)
                 j0 = (m + n) + (t - 1) * (m + 2 * n)
-                Sblock = S[i0 : i0 + n, j0 : j0 + m + n]
-                STblock = S[j0 : j0 + m + n, i0 : i0 + n]
+                #Sblock = S[i0 : i0 + n, j0 : j0 + m + n]
+                #STblock = S[j0 : j0 + m + n, i0 : i0 + n]
+                Sblock = kktsol[i0:i0+n,[0]] @ (kktsol[j0:j0+m+n,[0]].T)
+                STblock = kktsol[j0:j0+m+n,[0]] @ (kktsol[i0:i0+n,[0]].T)
                 grad += (Sblock + STblock.T) / 2.0
 
             if t == 0:
@@ -1047,8 +1136,10 @@ class DiscreteLQR:
                 ATblock = Ablock.T
                 gradA = (Ablock + ATblock.T) / 2.0
 
-                Bblock = S[m : m + n, 0:m]
-                BTblock = S[0:m, m : m + n]
+                # Bblock = S[m : m + n, 0:m]
+                # BTblock = S[0:m, m : m + n]
+                Bblock = kktsol[m:m+n,[0]] @ (kktsol[0:m,[0]].T)
+                BTblock = kktsol[0:m,[0]] @ (kktsol[m:m+n,[0]].T)
                 gradB = (Bblock + BTblock.T) / 2.0
                 grad += np.hstack((gradA, gradB))
 
@@ -1078,46 +1169,220 @@ class DiscreteLQR:
     #########################################################################################################
     ## SENSITIVITY ANALYSIS -- GRADIENTS OF GENERAL TRAJECTORY FUNCTION "W" w.r.t. DYNAMIC ELEMENTS
     #########################################################################################################
-    #
-    def sensWsetup(self, wx, wu, x0):
+    # There is a confusing minus sign on the right in the KKT writeup, that we must consider here.
+
+    def sensWsetup(self, wx, wu, x0):    # OLD BUT WORKING
+        # Build and record the column-vector of sensitivity elements.
+        # Return the sparse rank-1 product matrix it helps to define.
+
         if self.BOP is not None:
             tol = 100 * np.finfo(float).eps
             if (
-                np.linalg.norm(wx - self.wx) < tol
-                and np.linalg.norm(wu - self.wu) < tol
+                np.linalg.norm(wx - self.coeff_wx) < tol
+                and np.linalg.norm(wu - self.coeff_wu) < tol
                 and np.linalg.norm(x0 - self.sol_x0) < tol
             ):
                 return self.BOP
 
-        # We need the nominal solution for the KKT system.
+        # We need the nominal solution for the base KKT system.
         # The backward/forward passes find that efficiently
-        _ = self.sensVsetup(x0)  # Build or just recall the optimal trajectory
+        _,_,_ = self.bestxul(x0)  # Build or just recall the optimal trajectory
         KKTsol0 = self.xul2kkt(self.sol_x, self.sol_u, self.sol_lam)
 
         # The corresponding sensitivity system has the same coefficient matrix.
         KKT = self.KKTmtx()
         # Stack coeffs of wx and wu into the right slots of the RHS vector.
-        sensrhs = self.xul2kkt(wx, wu, np.zeros(wx.shape))
-        senssol = np.linalg.solve(KKT, sensrhs)
-        # ppm.ppm(senssol,"senssol, printed by function sensWsetup,")
+        # There is a sign-change issue to fret over
+        sensrhs = -self.xul2kkt(wx, wu, np.zeros(wx.shape))
+        sensWcol = np.linalg.solve(KKT, sensrhs)
+        # ppm.ppm(sensWcol,"sensWcol, printed by function sensWsetup,")
 
         # Calculate the Big Olde Product and make it part of the system object
-        self.BOP = -senssol @ KKTsol0.T
-        self.wx = wx
-        self.wu = wu
-        self.senssol = senssol
+        self.BOP = -sensWcol @ KKTsol0.T
+        self.coeff_wx = wx
+        self.coeff_wu = wu
+        self.sensWcol = sensWcol
 
         return self.BOP
 
+    def sensWsetup(self, wx, wu, x0):   # NEW ... AND IMPROVED?
+        # Build and record the column-vector of sensitivity elements.
+        # Return the sparse rank-1 product matrix it helps to define.
+
+        if self.BOP is not None:
+            tol = 100 * np.finfo(float).eps
+            if (
+                np.linalg.norm(wx - self.coeff_wx) < tol
+                and np.linalg.norm(wu - self.coeff_wu) < tol
+                and np.linalg.norm(x0 - self.sol_x0) < tol
+            ):
+                return self.BOP
+
+        if True:  # Explain why we are going to do all that follows.
+            print("\n\n***** LAUNCHING sensWsetup. Possible reasons follow. *****")
+            print("  self.BOP is None.") if self.BOP is None else 0
+            print("  self.coeff_wx is None.") if self.coeff_wx is None \
+                else print(f"  wx difference is {np.linalg.norm(wx - self.coeff_wx)}")
+            print("  self.coeff_wu is None.") if self.coeff_wu is None \
+                else print(f"  wu difference is {np.linalg.norm(wu - self.coeff_wu)}")
+            print("  self.sol_x0 is None.") if self.sol_x0 is None \
+                else print(f"  x0 difference is {np.linalg.norm(x0 - self.sol_x0)}")
+            print()
+
+        # We need the matrices built in the backward pass that solved
+        # the nominal system. The next call makes sure these are in place:
+        _,_,_ = self.bestxul(x0)  # Build or just recall the optimal trajectory
+
+        # Use pointers to the memo-ized elements of the nominal solution
+        m, n, T = self.m, self.n, self.T
+#        V_mats = self.V_mats
+#        K_mats = self.K_mats
+#        Q_mats = self.Q_mats
+
+        # Allocate storage for elements of the new solution
+
+        q_vecs = np.zeros((m+n, 1, T))
+        k_vecs = np.zeros((m, 1, T))
+        v_vecs = np.zeros((n, 1, T + 1))
+
+        # Set up for backward pass, using suitable gradient element
+        v = -wx[:,[0],T]
+        v_vecs[:,[0],T] = v
+
+        # Run the backward pass, re-using matrices found in nominal case
+        for t in reversed(range(T)):
+            # gradients replace the RHS elements c, f in the nominal setup:
+            c = -np.vstack(( wx[:,[0],t], wu[:,[0],t] ))
+            f = np.zeros((n,1))
+
+            # Remember the collection of matrices intrinsic to the system
+            C = self.C(t)
+            F = self.F(t)
+            V = self.V_mats[:, :, t + 1]
+            Q = self.Q_mats[:,:,t]
+            K = self.K_mats[:,:,t]
+
+            # Run the backward iteration for the vector-parts only
+            v = v_vecs[:, [0], t+1]
+            q = c + F.T @ V @ f + F.T @ v
+
+            if False:
+                print(f"\nStep {t} of accelerated backward iteration.")
+                print(f"Build q_{t} from v_{t+1} and c_{t}, where ...")
+                ppm.ppm(v,f"v_{t+1}")
+                ppm.ppm(c,f"c_{t}")
+                ppm.ppm(q,f"q_{t}")
+
+#                ppm.ppm(self.c(t),f"c({t}) from nominal system")
+#                ppm.ppm(self.q_vecs[:,0,t],f"q({t}) from nominal system")
+
+            Q_xu = Q[: n, n :]
+            Q_uu = Q[n :, n :]
+            q_x = q[: n].reshape(n, 1)
+            q_u = q[n :].reshape(m, 1)
+            k = -np.linalg.solve(Q_uu, q_u) #.reshape(m, 1)
+            v = q_x + Q_xu @ k
+
+
+            if False:
+                # Print for debugging.
+                print(f"Continue, using k_{t} to generate v_{t}, as follows.")
+                ppm.ppm(k,f"k_{t}")
+                ppm.ppm(v,f"v_{t}")
+                print(f"\nReport from stage t={t}:")
+                ppm.ppm(self.C(t),f"C({t})")
+                ppm.ppm(self.F(t),f"F({t})")
+                ppm.ppm(c,f"c({t})")
+                ppm.ppm(f,f"f({t})")
+                ppm.ppm(self.V_mats[:, :, t + 1],f"V({t+1})")
+                ppm.ppm(v_vecs[:, [0], t + 1],f"v({t+1})")
+                ppm.ppm(Q,f"Q({t})")
+                ppm.ppm(q,f"q({t})")
+
+            q_vecs[:, 0, [t]] = q
+            k_vecs[:, 0, [t]] = k
+            v_vecs[:, 0, [t]] = v
+
+        ppm.ppm(q_vecs,"q_vecs from external scheme",sigfigs=5)
+        print
+        ppm.ppm(k_vecs,"k_vecs from external scheme",sigfigs=5)
+        print
+        ppm.ppm(v_vecs,"v_vecs from external scheme",sigfigs=5)
+
+        # Run the forward pass just as in the nominal case,
+        # but use the adjusted vector elements just found.
+        # The variable names here are very misleading!
+        x = np.zeros((n, 1, T + 1))
+        u = np.zeros((m, 1, T))
+        lam = np.zeros((n, 1, T))
+
+        x[:, [0], 0] = -wx[:,[0],0]  # Initial point
+        for t in range(T):
+            x_t = x[:, [0], t]   # Current state is known. Simplify notation.
+            u_t = self.K_mats[:, :, t] @ x_t + k_vecs[:,[0],t]
+            z_t = np.vstack((x_t, u_t))
+
+            u[:, 0, [t]] = u_t
+            # x[:, 0, [t + 1]] = self.F(t) @ z_t + self.f(t)  # Original forward pass
+            x[:, 0, [t + 1]] = self.F(t) @ z_t # In sensitivity pass, RHS slot for f holds 0
+            
+        x_T = x[:, [0], T]
+        u_T = np.zeros((m, 1))
+        z_T = np.vstack((x_T, u_T))
+        #ppm.ppm(x_T,f"x_{T}")
+
+        # Iterate to recover solutions in the lambda slot.
+        # Remember: nominal ingredient c_x gets replaced with wx.
+        lam[:, [0], T - 1] = self.C(T)[0:n, 0:n] @ x_T - wx[:, [0], [T]]
+
+        for s in range(T - 1):
+            t = T - 1 - s
+            lam[:, 0, [t - 1]] = (
+                self.F(t)[0:n, 0:n].T @ lam[:, 0, [t]]
+                + self.C(t)[0:n, 0:n] @ x[:, 0, [t]]
+                + self.C(t)[0:n, n : n + m] @ u[:, 0, [t]]
+                - wx[:, [0], [t]]
+            )
+
+        print(f"\nSensitivity findings based on backward-forward passes:\n")
+        ppm.ppm(x[:,0,:],"now in slots corresponding to state sequence x_t (by cols)",sigfigs=5)
+        ppm.ppm(u[:,0,:],"now in slots corresponding to control sequence u_t (by cols)",sigfigs=5)
+        ppm.ppm(lam[:,0,:],"now in slots corresponding to  multiplier sequence lambda_t (by cols)",sigfigs=5)
+
+        sensWcol = self.xul2kkt(x,u,lam)  # Ingredients available. Put in KKT format.
+
+        # Recall the nominal solution. Put that into KKT format:
+        KKTsol0 = self.xul2kkt(self.sol_x, self.sol_u, self.sol_lam)
+
+        # Calculate the Big Olde Product. Remember it, and the coefficients.
+        self.BOP = -sensWcol @ KKTsol0.T
+
+        self.coeff_wx = wx
+        self.coeff_wu = wu
+        self.sensWcol = sensWcol
+
+        if True:
+            # Test by solving KKT directly. This is expensive!
+            print()
+            KKT = self.KKTmtx()
+            KKTsensrhs = -self.xul2kkt(wx, wu, np.zeros(wx.shape))
+            KKTsensWcol = np.linalg.solve(KKT, KKTsensrhs)
+            delta = np.linalg.norm(KKTsensWcol-sensWcol)
+            print(f"In sensWsetup, two-pass method misses by {delta:6.1e}.")
+            if delta > 1.E-7:
+                sidebyside = np.hstack((sensWcol,KKTsensWcol))
+                ppm.ppm(sidebyside,"showing both choices, 2-pass | linalg,")
+
+        return self.BOP
 
     def gradx0W(self, wx, wu, x0):
-        # - derivative of value W(x0) w.r.t. x0
+        # Return gradient derivative of value W(x0,C,c,F,f) w.r.t. x0
         T = self.Tmax
         m = self.m
         n = self.n
 
         BOP = self.sensWsetup(wx, wu, x0)
-        senslam0 = self.senssol[m : m + n, [0]]
+        senslam0 = self.sensWcol[m : m + n, [0]]
         wx0 = wx[:, [0], 0]
         mtxA0 = self.F(0)[:, 0:n]
         grad = wx0 - mtxA0.T @ senslam0
@@ -1173,7 +1438,7 @@ class DiscreteLQR:
         n = self.n
 
         BOP = self.sensWsetup(wx, wu, x0)
-        ppm.ppm(self.senssol, f"senssol, printed in gradctW,")
+        ppm.ppm(self.sensWcol, f"sensWcol, printed in gradctW,")
 
         tlist = [t]
         if self.c_vecs.ndim == 2:
@@ -1184,13 +1449,13 @@ class DiscreteLQR:
         for t in tlist:
             if 0 < t and t < T:
                 i0 = t * (2 * n + m) - n
-                grad[0 : n + m, [0]] += -self.senssol[i0 : i0 + (n + m)]
+                grad[0 : n + m, [0]] += -self.sensWcol[i0 : i0 + (n + m)]
 
             if t == 0:
-                grad[n : n + m, [0]] += -self.senssol[0:m, [0]]
+                grad[n : n + m, [0]] += -self.sensWcol[0:m, [0]]
 
             if t == T:
-                grad[0:n, [0]] += -self.senssol[(2 * n + m) * T - n :]
+                grad[0:n, [0]] += -self.sensWcol[(2 * n + m) * T - n :]
 
         return grad
 
@@ -1217,7 +1482,7 @@ class DiscreteLQR:
                 grad += 2.0 * ((Sblock + STblock.T) / 2.0)
 
             if t == 0:
-                ss0 = self.senssol[m : m + n]
+                ss0 = self.sensWcol[m : m + n]
                 gradA = -ss0 @ x0.T
 
                 Bblock = BOP[m : m + n, 0:m]
@@ -1235,7 +1500,7 @@ class DiscreteLQR:
 
         BOP = self.sensWsetup(wx, wu, x0)
 
-        # ppm.ppm(self.senssol,f"senssol, printed in gradftW,")
+        # ppm.ppm(self.sensWcol,f"sensWcol, printed in gradftW,")
 
         tlist = [t]
         if self.f_vecs.ndim == 2:
@@ -1247,10 +1512,10 @@ class DiscreteLQR:
         for t in tlist:
             if 0 < t and t < T:
                 i0 = t * (2 * n + m) + m
-                grad[:, [0]] += -self.senssol[i0 : i0 + n, [0]]
+                grad[:, [0]] += -self.sensWcol[i0 : i0 + n, [0]]
 
             if t == 0:
-                grad[:, [0]] += -self.senssol[m : m + n, [0]]
+                grad[:, [0]] += -self.sensWcol[m : m + n, [0]]
 
         return grad
 
