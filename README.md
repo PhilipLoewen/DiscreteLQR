@@ -58,8 +58,10 @@ but it also includes a function that will build and print the matrix.
 
 ## Documentation
 
-I have some mathy notes on the ideas and symbols that come up in the code.
-Some day I might clean them up and post them.
+There are lots of comments in the code.
+For an overview that may clarify the mathematical side
+of the notation, look at the slide deck named presentation.pdf
+in the main repo.
 
 ## Alternatives
 
